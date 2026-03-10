@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
+import type { Relay } from "applesauce-relay";
 import type { RelayMonitor } from "applesauce-common/casts";
 import type { RelayDiscovery } from "applesauce-common/casts";
 import { removeOutboxRelay } from "applesauce-core/operations/mailboxes";
 import { use$ } from "applesauce-react/hooks";
+import { of, timeout } from "rxjs";
 import { useApp } from "../../context/AppContext.tsx";
 import { eventStore } from "../../lib/store.ts";
 import { factory } from "../../lib/factory.ts";
-import { monitors$ } from "../../lib/relay-monitors.ts";
+import { pool } from "../../lib/relay.ts";
+import { monitors$, relayStatusWithTimeout } from "../../lib/relay-monitors.ts";
+
+/** ms to wait for the kind:10002 relay list before treating it as not found */
+const OUTBOX_LOAD_TIMEOUT_MS = 10_000;
+/** ms to wait for all relay verdicts before treating unknowns as skippable */
+const VERDICT_TIMEOUT_MS = 15_000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -22,7 +30,10 @@ function useMonitorRelayStatus(
   monitor: RelayMonitor,
   relayUrl: string,
 ): RelayDiscovery | null | undefined {
-  return use$(() => monitor.relayStatus(relayUrl), [monitor.uid, relayUrl]);
+  return use$(
+    () => relayStatusWithTimeout(monitor, relayUrl),
+    [monitor.uid, relayUrl],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -120,17 +131,24 @@ function MonitorDetailRow({
 
 function RelayRow({
   relayUrl,
+  relay,
   monitors,
   onRemove,
   removing,
 }: {
   relayUrl: string;
+  relay: Relay;
   monitors: RelayMonitor[];
   onRemove: (url: string) => void;
   removing: boolean;
 }) {
   const verdict = useRelayVerdict(monitors, relayUrl);
   const isOffline = verdict === "offline";
+  const info = use$(relay.information$);
+  const iconUrl = use$(relay.icon$);
+
+  const name = info?.name ?? relayUrl;
+  const description = info?.description;
 
   return (
     <div
@@ -142,8 +160,34 @@ function RelayRow({
         .join(" ")}
     >
       <div className="flex items-center gap-3">
-        <div className="flex-1 min-w-0">
-          <span className="font-mono text-sm break-all">{relayUrl}</span>
+        <div className="flex-1 min-w-0 flex items-center gap-3">
+          {iconUrl ? (
+            <img
+              src={iconUrl}
+              alt=""
+              className="size-8 rounded-lg shrink-0 object-cover bg-base-200"
+            />
+          ) : (
+            <div
+              className="size-8 rounded-lg shrink-0 bg-base-200 flex items-center justify-center text-base-content/40 text-xs font-mono"
+              aria-hidden
+            >
+              …
+            </div>
+          )}
+          <div className="min-w-0 flex flex-col gap-0.5">
+            <span className="font-medium text-sm text-base-content truncate">
+              {name}
+            </span>
+            <span className="font-mono text-xs text-base-content/60 break-all">
+              {relayUrl}
+            </span>
+            {description != null && description !== "" && (
+              <p className="text-xs text-base-content/70 line-clamp-2 mt-0.5">
+                {description}
+              </p>
+            )}
+          </div>
         </div>
         <VerdictBadge verdict={verdict} />
         {isOffline && (
@@ -183,9 +227,16 @@ function OutboxRelayHealth() {
   // Load monitors
   const monitors = use$(monitors$) ?? [];
 
-  // Load user's outbox relays
+  // Load user's outbox relays.
+  // Pipes a timeout so the stream resolves to null (not found) rather than
+  // staying undefined (loading) forever if kind:10002 never arrives from relays.
   const outboxes = use$(
-    () => subjectUser?.outboxes$ ?? undefined,
+    () =>
+      subjectUser
+        ? subjectUser.outboxes$.pipe(
+            timeout({ first: OUTBOX_LOAD_TIMEOUT_MS, with: () => of(null) }),
+          )
+        : undefined,
     [subjectUser?.pubkey],
   );
 
@@ -200,18 +251,32 @@ function OutboxRelayHealth() {
     [outboxes, removed],
   );
 
-  // Compute per-relay verdicts at the page level so we can aggregate them
-  // without violating hooks rules inside conditionals.
-  // We do this by rendering RelayRow which internally calls the hooks — the
-  // aggregate is derived from the relay count rather than the per-relay state,
-  // so we use a separate aggregation hook below.
-  const allLoaded = monitors.length > 0 && outboxes !== undefined;
+  // Relay instances from the pool (get-or-create) for NIP-11 name/description/icon
+  const relayEntries = useMemo(
+    () => relayList.map((url) => ({ url, relay: pool.relay(url) })),
+    [relayList],
+  );
+
+  // outboxes is undefined while loading, null if timed-out/not-found, string[] when loaded.
+  // monitors$ always resolves (each inner observable catches errors), so we wait for outboxes.
+  const allLoaded = outboxes !== undefined;
 
   // Auto-advance when all relays are confirmed online
   // We detect this through a ref-counted mechanism: each RelayRow reports via
   // onVerdictReady callback pattern — but since hooks can't be called
   // conditionally and we render RelayRows anyway, we track verdicts in state.
   const [verdicts, setVerdicts] = useState<Record<string, RelayVerdict>>({});
+
+  // Verdict timeout — if checking takes more than VERDICT_TIMEOUT_MS, treat unknowns as skippable
+  const [verdictTimedOut, setVerdictTimedOut] = useState(false);
+  useEffect(() => {
+    if (!allLoaded || relayList.length === 0) return;
+    const timer = setTimeout(
+      () => setVerdictTimedOut(true),
+      VERDICT_TIMEOUT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [allLoaded, relayList.length]);
 
   const allHealthy = useMemo(() => {
     if (!allLoaded || relayList.length === 0) return false;
@@ -222,6 +287,16 @@ function OutboxRelayHealth() {
     () => relayList.some((url) => verdicts[url] === "offline"),
     [relayList, verdicts],
   );
+
+  // True when the user can proceed: no offline relays and either all verdicts are
+  // known or the verdict timeout has elapsed (so unknowns don't block forever)
+  const canProceed = useMemo(() => {
+    if (hasOffline) return false;
+    if (verdictTimedOut) return true;
+    return relayList.every(
+      (url) => verdicts[url] !== undefined && verdicts[url] !== "unknown",
+    );
+  }, [hasOffline, verdictTimedOut, relayList, verdicts]);
 
   // Auto-advance when everything is confirmed healthy
   useEffect(() => {
@@ -253,7 +328,8 @@ function OutboxRelayHealth() {
   }
 
   // ---------------------------------------------------------------------------
-  // Loading state — monitors or outboxes not yet ready
+  // Loading state — outboxes stream not yet resolved
+  // (resolves to null after OUTBOX_LOAD_TIMEOUT_MS if kind:10002 never arrives)
   // ---------------------------------------------------------------------------
   if (!allLoaded) {
     return (
@@ -264,6 +340,9 @@ function OutboxRelayHealth() {
             <p className="text-sm text-base-content/60">
               Loading your relay list…
             </p>
+            <button className="btn btn-ghost btn-sm" onClick={next}>
+              Skip
+            </button>
           </div>
         </div>
       </div>
@@ -271,7 +350,8 @@ function OutboxRelayHealth() {
   }
 
   // ---------------------------------------------------------------------------
-  // No outbox relays found
+  // No outbox relays found — either the event was truly empty, or the stream
+  // timed out (outboxes === null) meaning kind:10002 was not found on relays.
   // ---------------------------------------------------------------------------
   if (relayList.length === 0 && removed.size === 0) {
     return (
@@ -287,8 +367,9 @@ function OutboxRelayHealth() {
               </h1>
             </div>
             <div className="bg-warning/10 border border-warning/30 rounded-xl p-4 text-sm text-warning">
-              No NIP-65 outbox relays found for this account. You may want to
-              add some before continuing.
+              {outboxes === null
+                ? "No NIP-65 relay list (kind:10002) could be found for this account. It may not exist yet, or relays were unreachable."
+                : "No outbox relays are listed in this account's NIP-65 relay list."}
             </div>
             <button className="btn btn-primary w-full" onClick={next}>
               Continue anyway
@@ -332,6 +413,9 @@ function OutboxRelayHealth() {
               </p>
             </div>
             <span className="loading loading-dots loading-sm text-base-content/40" />
+            <button className="btn btn-ghost btn-sm" onClick={next}>
+              Next
+            </button>
           </div>
         </div>
       </div>
@@ -364,10 +448,11 @@ function OutboxRelayHealth() {
 
           {/* Relay list */}
           <div className="flex flex-col gap-3">
-            {relayList.map((url) => (
+            {relayEntries.map(({ url, relay }) => (
               <VerdictTracker
                 key={url}
                 relayUrl={url}
+                relay={relay}
                 monitors={monitors}
                 removing={removing.has(url)}
                 onRemove={handleRemove}
@@ -395,19 +480,21 @@ function OutboxRelayHealth() {
             </div>
           )}
 
-          {/* Next button — available once all verdicts are known and no offline remain */}
-          <button
-            className="btn btn-primary w-full"
-            onClick={next}
-            disabled={
-              hasOffline ||
-              relayList.some((u) => verdicts[u] === "unknown" || !verdicts[u])
-            }
-          >
-            {relayList.some((u) => !verdicts[u] || verdicts[u] === "unknown")
-              ? "Checking…"
-              : "Next"}
-          </button>
+          {/* Next / Skip — always provide a way forward */}
+          <div className="flex flex-col gap-2">
+            <button
+              className="btn btn-primary w-full"
+              onClick={next}
+              disabled={!canProceed}
+            >
+              {canProceed ? "Next" : "Checking…"}
+            </button>
+            {!canProceed && (
+              <button className="btn btn-ghost btn-sm w-full" onClick={next}>
+                Skip
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -420,12 +507,14 @@ function OutboxRelayHealth() {
 
 function VerdictTracker({
   relayUrl,
+  relay,
   monitors,
   removing,
   onRemove,
   onVerdict,
 }: {
   relayUrl: string;
+  relay: Relay;
   monitors: RelayMonitor[];
   removing: boolean;
   onRemove: (url: string) => void;
@@ -440,6 +529,7 @@ function VerdictTracker({
   return (
     <RelayRow
       relayUrl={relayUrl}
+      relay={relay}
       monitors={monitors}
       onRemove={onRemove}
       removing={removing}

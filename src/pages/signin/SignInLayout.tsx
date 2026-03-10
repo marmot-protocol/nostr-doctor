@@ -1,4 +1,4 @@
-import { Outlet } from 'react-router'
+import { Outlet } from "react-router";
 
 function SignInLayout() {
   return (
@@ -17,7 +17,7 @@ function SignInLayout() {
         <Outlet />
       </div>
     </div>
-  )
+  );
 }
 
-export default SignInLayout
+export default SignInLayout;

@@ -113,7 +113,9 @@ import { pool } from "./lib/relay.ts";
 Prefix with `_` to suppress the `noUnusedParameters` error:
 
 ```ts
-function handler(_event: MouseEvent) { /* intentionally unused */ }
+function handler(_event: MouseEvent) {
+  /* intentionally unused */
+}
 ```
 
 ---
@@ -133,21 +135,27 @@ Prettier is configured (`.prettierrc`): `tabWidth: 2`, `useTabs: false`. Run `pn
 
 ### Naming
 
-| Entity                | Convention               | Example                              |
-| --------------------- | ------------------------ | ------------------------------------ |
-| React components      | PascalCase               | `RelayRow`, `VerdictBadge`           |
-| Hooks                 | camelCase + `use` prefix | `useRelayVerdict`, `useApp`          |
-| Functions / variables | camelCase                | `handleRemove`, `relayList`          |
-| Constants             | UPPER_SNAKE or camelCase | `DEFAULT_RELAYS`, `monitors$`        |
-| RxJS subjects/obs.    | camelCase + `$` suffix   | `subjectPubkey$`, `monitors$`        |
-| Files (components)    | PascalCase               | `SignInLayout.tsx`, `CompleteView`   |
-| Files (hooks/utils)   | camelCase or kebab-case  | `relay-monitors.ts`, `accounts.ts`   |
+| Entity                | Convention               | Example                            |
+| --------------------- | ------------------------ | ---------------------------------- |
+| React components      | PascalCase               | `RelayRow`, `VerdictBadge`         |
+| Hooks                 | camelCase + `use` prefix | `useRelayVerdict`, `useApp`        |
+| Functions / variables | camelCase                | `handleRemove`, `relayList`        |
+| Constants             | UPPER_SNAKE or camelCase | `DEFAULT_RELAYS`, `monitors$`      |
+| RxJS subjects/obs.    | camelCase + `$` suffix   | `subjectPubkey$`, `monitors$`      |
+| Files (components)    | PascalCase               | `SignInLayout.tsx`, `CompleteView` |
+| Files (hooks/utils)   | camelCase or kebab-case  | `relay-monitors.ts`, `accounts.ts` |
 
 ### React components
 
 ```tsx
 // Named function declaration, default export — always
-function RelayRow({ relayUrl, monitors }: { relayUrl: string; monitors: RelayMonitor[] }) {
+function RelayRow({
+  relayUrl,
+  monitors,
+}: {
+  relayUrl: string;
+  monitors: RelayMonitor[];
+}) {
   return <div className="rounded-xl border p-4">...</div>;
 }
 
@@ -165,7 +173,7 @@ export default RelayRow;
 ```tsx
 useEffect(() => {
   const timer = setTimeout(() => next(), 1500);
-  return () => clearTimeout(timer);  // always return cleanup
+  return () => clearTimeout(timer); // always return cleanup
 }, [next]);
 ```
 
@@ -224,6 +232,201 @@ Consult the applesauce MCP server for API details. Consult the nostr MCP for NIP
 - User-facing errors must surface in UI state — not `console.error` alone
 - Never swallow errors silently
 - Read-only mode (no signer): unsigned `EventTemplate` objects are collected in `draftEvents` via `AppContext`; they are not published until the user signs in
+
+---
+
+## Report Page Design Contract
+
+This section defines the behavioral contract every diagnostic report page must follow.
+
+### File & Registration
+
+1. Create the component in `src/pages/reports/<kebab-name>.tsx`
+2. Register it in `src/pages/reports.tsx` by adding an entry to `REPORTS`:
+   ```ts
+   {
+     name: "my-report",
+     Component: lazy(() => import("./reports/my-report.tsx")),
+   }
+   ```
+3. Routes are automatically created at `/r/<name>` by `AppContext`.
+
+### Loading State
+
+Show a spinner **plus a short progress description** while fetching:
+
+```tsx
+if (!dataLoaded) {
+  return (
+    <div className="flex flex-col items-center gap-6 py-8">
+      <span className="loading loading-spinner loading-lg text-primary" />
+      <p className="text-sm text-base-content/60">Loading your profile…</p>
+      <button className="btn btn-ghost btn-sm" onClick={next}>
+        Skip
+      </button>
+    </div>
+  );
+}
+```
+
+**Always show a Skip button during loading** — from the very first frame, not only after a timeout fires.
+
+### Loading Timeout — Stream Level
+
+**Never let a user get stuck on a loading spinner.** Timeouts belong in the data stream, not in React state. Pipe a `timeout` operator directly on the observable so the stream resolves to `null` (not found / timed out) rather than staying `undefined` (loading) forever.
+
+```ts
+import { of, timeout } from "rxjs";
+
+const PROFILE_LOAD_TIMEOUT_MS = 10_000;
+
+// In the use$() factory:
+const profile = use$(
+  () =>
+    subjectUser
+      ? subjectUser.profile$.pipe(
+          timeout({ first: PROFILE_LOAD_TIMEOUT_MS, with: () => of(null) }),
+        )
+      : undefined,
+  [subjectUser?.pubkey],
+);
+```
+
+**The three stream states:**
+
+| Value       | Meaning                              | UI to show                      |
+| ----------- | ------------------------------------ | ------------------------------- |
+| `undefined` | Stream has not emitted yet (loading) | Spinner + Skip button           |
+| `null`      | Stream timed out — data not found    | "Not found" state + Next button |
+| value       | Data arrived successfully            | Normal report content           |
+
+```tsx
+const dataLoaded = data !== undefined; // false = still loading
+const dataNotFound = data === null; // true = timed out
+
+if (!dataLoaded) {
+  /* spinner + Skip */
+}
+if (dataNotFound) {
+  /* not-found message + Next */
+}
+// otherwise: render report content
+```
+
+This approach lets each report **still provide partial help** (e.g. "no profile found — you may want to create one") rather than just offering a generic Skip.
+
+**Hook ordering:** Derived booleans like `dataLoaded` must be declared **before** any `useEffect` that references them. TypeScript enforces this at compile time.
+
+**Verdict timeouts:** For pages that check per-relay or per-item statuses (which may stay `"unknown"` indefinitely), use a React-layer `setTimeout` as a secondary timeout (e.g. 15 s) since per-item status streams already have their own per-item timeouts (see `relayStatusWithTimeout`). After the secondary timeout fires, treat remaining `"unknown"` items as skippable and enable the Next button:
+
+```tsx
+const [verdictTimedOut, setVerdictTimedOut] = useState(false);
+useEffect(() => {
+  if (!dataLoaded || items.length === 0) return;
+  const timer = setTimeout(() => setVerdictTimedOut(true), 15_000);
+  return () => clearTimeout(timer);
+}, [dataLoaded, items.length]);
+
+// Derive: user can proceed when no issues AND (all known OR timed out)
+const canProceed = !hasIssues && (allKnown || verdictTimedOut);
+```
+
+The Next button must use `canProceed`; also render a visible Skip button while `!canProceed`.
+
+### Auto-Advance Rules
+
+- **No issues found:** auto-advance to the next report after **1500 ms**.
+- **After a successful publish:** auto-advance after **1500 ms**.
+- Both use a `setTimeout` inside `useEffect` with a cleanup return — see the Hooks and effects pattern above.
+- Auto-advance always calls `next()` from `useApp()`.
+
+### Missing Prerequisite Event
+
+If a report requires a Nostr event that doesn't exist (e.g. no NIP-65 relay list), **do not auto-advance**. Show an explicit error state:
+
+```tsx
+// Example: required event not found
+return (
+  <div className="flex flex-col gap-4">
+    <p className="text-error text-sm">
+      No relay list (NIP-65) found for this account. An earlier report should
+      have created one.
+    </p>
+    <button className="btn btn-outline btn-sm" onClick={next}>
+      Next
+    </button>
+  </div>
+);
+```
+
+Design the report flow so earlier pages create prerequisite events. If a later page still can't find what it needs, show this error state with a Next button — never crash or silently skip.
+
+### Read-Only Mode (No Signer)
+
+Call `publish()` from `useApp()` exactly as you would in signed-in mode. When no signer is present, `publish()` automatically queues the `EventTemplate` into `draftEvents`. **Do not add inline sign-in prompts on report pages** — the `complete/` page handles surfacing drafts and prompting sign-in.
+
+### Fix Granularity & Multi-Event Publishing
+
+- Fix granularity is driven by the **underlying Nostr event model**: if multiple items are stored in one event (e.g. all relays in a single kind:10002), batch them into one `publish()` call. If separate events are needed, multiple `publish()` calls are fine.
+- All `publish()` calls are **fire-and-forget** (independent). Do not await or serialize them. Dispatch all needed publishes, then show a success state and auto-advance after 1500 ms.
+
+### Skip / Next Button
+
+Always provide a way to proceed without fixing. When issues are present, a "Skip" button (or "Next" if the page is in a done state) must be visible and call `next()`.
+
+```tsx
+<button className="btn btn-ghost btn-sm" onClick={next}>
+  Skip
+</button>
+```
+
+### Error Display
+
+Publish errors (relay failures, signer rejection, etc.) must be shown **above the Skip/Next buttons**, inline in the card. Do not use toasts or replace the whole page.
+
+```tsx
+{
+  error && <p className="text-error text-sm">{error}</p>;
+}
+<div className="flex gap-2 justify-end">
+  <button className="btn btn-ghost btn-sm" onClick={next}>
+    Skip
+  </button>
+</div>;
+```
+
+### Expandable "Deeper" Details
+
+Optional. Add a collapsible details section per item **only where it genuinely adds value** (e.g. NIP-11 metadata for a relay, raw event fields for a profile). Use a DaisyUI `<details>` / `collapse` component or a local `open` state toggle. There is no requirement that every item or every page has this.
+
+### Relay Strategy for Fetching
+
+Each report page chooses its own relay strategy. The **recommended approach** is to fetch the subject's events from their outbox relays (their NIP-65 write relays), as this gives the most accurate and up-to-date data. Fall back to `LOOKUP_RELAYS` from `lib/relay.ts` when the outbox list is unavailable.
+
+### State Management Pattern
+
+Use `useState` with discriminated boolean flags — consistent with the existing pages:
+
+```ts
+const [loading, setLoading] = useState(true);
+const [error, setError] = useState<string | null>(null);
+const [data, setData] = useState<MyDataType | null>(null);
+const [done, setDone] = useState(false);
+```
+
+Avoid `useReducer` unless the state transitions become genuinely complex.
+
+### No Diff Preview
+
+Publish immediately on button press. The button label (e.g. "Remove", "Fix") communicates the action clearly enough. No confirmation modals or before/after diffs are needed.
+
+### Referral System
+
+Report pages have no responsibility for referral links. Just call `publish()`. The `complete/` page handles draft collection, Blossom uploads, and referral URL generation.
+
+### Sub-components
+
+Declare sub-components (e.g. item rows, verdict badges) **above** the main page component in the same file. Only extract to a separate file if the sub-component is shared across multiple report pages.
 
 ---
 

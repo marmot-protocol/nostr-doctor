@@ -8,6 +8,10 @@ import type { PageDefinition as ReportPageDefinition } from "../context/AppConte
 // ---------------------------------------------------------------------------
 const REPORTS: ReportPageDefinition[] = [
   {
+    name: "profile-metadata",
+    Component: lazy(() => import("./reports/profile-metadata.tsx")),
+  },
+  {
     name: "outbox-relay-health",
     Component: lazy(() => import("./reports/outbox-relays-health.tsx")),
   },

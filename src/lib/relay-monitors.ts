@@ -10,8 +10,11 @@ import {
   of,
   shareReplay,
   startWith,
+  takeWhile,
+  timeout,
 } from "rxjs";
 import { eventLoader, eventStore } from "./store.ts";
+import { normalizeURL } from "applesauce-core/helpers";
 
 /** The canonical NIP-66 relay that publishes kind:10166 monitor announcements. */
 export const MONITOR_RELAYS = ["wss://relay.nostr.watch/"];
@@ -71,6 +74,33 @@ export async function getMonitor(
       mapEventsToStore(eventStore),
       castEventStream(RelayMonitor, eventStore),
       catchError(() => of(undefined)),
+    ),
+  );
+}
+
+/** Observable of status for a single relay from a monitor; emits `undefined` while loading, then `RelayDiscovery` or `null` (unknown/timeout). */
+export function relayStatusWithTimeout(
+  monitor: RelayMonitor,
+  relayUrl: string,
+) {
+  return monitor
+    .relayStatus(normalizeURL(relayUrl))
+    .pipe(
+      startWith(undefined),
+      timeout({ first: FETCH_TIMEOUT_MS, with: () => of(null) }),
+    );
+}
+
+/** Returns an observable of a map of relay statuses from a monitor, relay status is `null` when unknown and `undefined` when loading */
+export function relayStatuses(monitor: RelayMonitor, relays: string[]) {
+  return combineLatest(
+    Object.fromEntries(
+      relays.map((relay) => [relay, relayStatusWithTimeout(monitor, relay)]),
+    ),
+  ).pipe(
+    // Complete when all statuses are known
+    takeWhile((statuses) =>
+      Object.values(statuses).every((status) => status !== undefined),
     ),
   );
 }

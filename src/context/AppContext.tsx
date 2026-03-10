@@ -70,6 +70,12 @@ export type AppContextValue = {
 
   /** Number of events successfully signed and published in this session (signed-in mode only) */
   publishedCount: number;
+
+  /**
+   * Pre-load a referral: sets the subject pubkey and bulk-seeds draft events.
+   * Called by ReferralView after fetching and decoding a Blossom referral blob.
+   */
+  loadReferral: (pubkey: string, events: EventTemplate[]) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -110,15 +116,17 @@ export function AppProvider({ pages, children }: AppProviderProps) {
       (p) => pagePath(p.name) === location.pathname,
     );
     if (currentIndex === -1) {
+      // Entering first report from pubkey/signin — push so back returns there
       navigate(pagePath(pages[0].name));
       return;
     }
+    const replace = { replace: true };
     if (currentIndex >= pages.length - 1) {
       // Last diagnostic page — go to the terminal complete view
-      navigate("/complete");
+      navigate("/complete", replace);
       return;
     }
-    navigate(pagePath(pages[currentIndex + 1].name));
+    navigate(pagePath(pages[currentIndex + 1].name), replace);
   }, [pages, location.pathname, navigate]);
 
   const publishEvent = useCallback(
@@ -140,6 +148,14 @@ export function AppProvider({ pages, children }: AppProviderProps) {
     [signer, subjectUser],
   );
 
+  const loadReferral = useCallback(
+    (pubkey: string, referralEvents: EventTemplate[]) => {
+      subjectPubkey$.next(pubkey);
+      setDraftEvents(referralEvents);
+    },
+    [],
+  );
+
   const value: AppContextValue = {
     subject: subjectUser,
     signer,
@@ -147,6 +163,7 @@ export function AppProvider({ pages, children }: AppProviderProps) {
     publish: publishEvent,
     events: draftEvents,
     publishedCount,
+    loadReferral,
   };
 
   return <AppContext value={value}>{children}</AppContext>;

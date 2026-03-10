@@ -1,44 +1,47 @@
-import type { NostrEvent } from 'applesauce-core/helpers'
+import type { NostrEvent } from "applesauce-core/helpers";
 import {
   decodeProfilePointer,
   getDisplayName,
   getProfileContent,
   getProfilePicture,
-} from 'applesauce-core/helpers'
-import { isNip05, queryProfile } from 'nostr-tools/nip05'
-import { useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router'
-import { useApp, getSafeRedirect } from '../../context/AppContext.tsx'
-import { subjectPubkey$ } from '../../lib/subjectPubkey.ts'
-import { primal } from '../../lib/primal.ts'
+} from "applesauce-core/helpers";
+import { isNip05, queryProfile } from "nostr-tools/nip05";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
+import { useApp, getSafeRedirect } from "../../context/AppContext.tsx";
+import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
+import { primal } from "../../lib/primal.ts";
 
 type SearchResult = {
-  pubkey: string
-  event: NostrEvent
-}
+  pubkey: string;
+  event: NostrEvent;
+};
 
-type InputMode = 'idle' | 'resolving' | 'searching' | 'error'
+type InputMode = "idle" | "resolving" | "searching" | "error";
 
 /** True if the string is a direct nip-19 or hex identifier — no network needed */
 function isDirectIdentifier(value: string): boolean {
-  const t = value.trim()
+  const t = value.trim();
   return (
-    t.startsWith('npub1') ||
-    t.startsWith('nprofile1') ||
+    t.startsWith("npub1") ||
+    t.startsWith("nprofile1") ||
     /^[0-9a-f]{64}$/i.test(t)
-  )
+  );
 }
 
 function ResultItem({
   result,
   onSelect,
 }: {
-  result: SearchResult
-  onSelect: (pubkey: string) => void
+  result: SearchResult;
+  onSelect: (pubkey: string) => void;
 }) {
-  const profile = getProfileContent(result.event)
-  const name = getDisplayName(profile, result.pubkey.slice(0, 8))
-  const avatar = getProfilePicture(profile, `https://robohash.org/${result.pubkey}.png`)
+  const profile = getProfileContent(result.event);
+  const name = getDisplayName(profile, result.pubkey.slice(0, 8));
+  const avatar = getProfilePicture(
+    profile,
+    `https://robohash.org/${result.pubkey}.png`,
+  );
 
   return (
     <button
@@ -51,128 +54,134 @@ function ResultItem({
         alt={name}
         className="w-8 h-8 rounded-full object-cover shrink-0 bg-base-300"
         onError={(e) => {
-          ;(e.currentTarget as HTMLImageElement).src = `https://robohash.org/${result.pubkey}.png`
+          (e.currentTarget as HTMLImageElement).src =
+            `https://robohash.org/${result.pubkey}.png`;
         }}
       />
       <div className="min-w-0">
-        <div className="text-sm font-medium text-base-content truncate">{name}</div>
+        <div className="text-sm font-medium text-base-content truncate">
+          {name}
+        </div>
         <div className="text-xs text-base-content/40 font-mono truncate">
           {result.pubkey.slice(0, 16)}…
         </div>
       </div>
     </button>
-  )
+  );
 }
 
 function StepPubkey() {
-  const navigate = useNavigate()
-  const location = useLocation()
-  const { next } = useApp()
-  const redirectTo = getSafeRedirect(location.search)
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { next } = useApp();
+  const redirectTo = getSafeRedirect(location.search);
 
-  const [value, setValue] = useState('')
-  const [resolvedPubkey, setResolvedPubkey] = useState('')
-  const [mode, setMode] = useState<InputMode>('idle')
-  const [error, setError] = useState('')
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [value, setValue] = useState("");
+  const [resolvedPubkey, setResolvedPubkey] = useState("");
+  const [mode, setMode] = useState<InputMode>("idle");
+  const [error, setError] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Auto-navigate as soon as a pubkey is resolved (subject only; no active account)
-  useEffect(() => {
-    if (!resolvedPubkey) return
-    subjectPubkey$.next(resolvedPubkey)
-    if (redirectTo) navigate(redirectTo)
-    else next()
-  }, [resolvedPubkey, navigate, redirectTo, next])
+  /** Commit subject and navigate — only on explicit user action (button click). */
+  function handleContinue() {
+    if (!resolvedPubkey) return;
+    subjectPubkey$.next(resolvedPubkey);
+    if (redirectTo) navigate(redirectTo);
+    else next();
+  }
 
   // Kick off async resolution whenever value changes.
   // Synchronous state resets happen in handleChange to avoid setState-in-effect.
   useEffect(() => {
-    const trimmed = value.trim()
-    if (!trimmed || isDirectIdentifier(trimmed)) return
+    const trimmed = value.trim();
+    if (!trimmed || isDirectIdentifier(trimmed)) return;
 
     debounceRef.current = setTimeout(async () => {
       if (isNip05(trimmed)) {
-        setMode('resolving')
+        setMode("resolving");
         try {
-          const pointer = await queryProfile(trimmed)
+          const pointer = await queryProfile(trimmed);
           if (pointer) {
-            setResolvedPubkey(pointer.pubkey)
-            setMode('idle')
+            setResolvedPubkey(pointer.pubkey);
+            setMode("idle");
           } else {
-            setError(`Could not resolve "${trimmed}" — check the NIP-05 address.`)
-            setMode('error')
+            setError(
+              `Could not resolve "${trimmed}" — check the NIP-05 address.`,
+            );
+            setMode("error");
           }
         } catch {
-          setError('NIP-05 lookup failed. Check the address and try again.')
-          setMode('error')
+          setError("NIP-05 lookup failed. Check the address and try again.");
+          setMode("error");
         }
       } else {
-        setMode('searching')
+        setMode("searching");
         try {
-          const events = await primal.userSearch(trimmed, 8)
+          const events = await primal.userSearch(trimmed, 8);
           const results: SearchResult[] = events
             .filter((e) => e.kind === 0)
-            .map((e) => ({ pubkey: e.pubkey, event: e }))
-          setSearchResults(results)
-          setMode('idle')
+            .map((e) => ({ pubkey: e.pubkey, event: e }));
+          setSearchResults(results);
+          setMode("idle");
         } catch {
-          setError('Search failed. Try again or paste a pubkey directly.')
-          setMode('error')
+          setError("Search failed. Try again or paste a pubkey directly.");
+          setMode("error");
         }
       }
-    }, 400)
+    }, 400);
 
     return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-    }
-  }, [value])
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [value]);
 
   function handleChange(newValue: string) {
-    setValue(newValue)
+    setValue(newValue);
     // Reset derived state synchronously in the event handler (not inside an effect)
-    setError('')
-    setResolvedPubkey('')
-    setSearchResults([])
-    if (debounceRef.current) clearTimeout(debounceRef.current)
+    setError("");
+    setResolvedPubkey("");
+    setSearchResults([]);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
 
-    const trimmed = newValue.trim()
+    const trimmed = newValue.trim();
     if (!trimmed) {
-      setMode('idle')
-      return
+      setMode("idle");
+      return;
     }
 
     if (isDirectIdentifier(trimmed)) {
-      const pointer = decodeProfilePointer(trimmed)
+      const pointer = decodeProfilePointer(trimmed);
       if (pointer) {
-        setResolvedPubkey(pointer.pubkey)
-        setMode('idle')
+        setResolvedPubkey(pointer.pubkey);
+        setMode("idle");
       } else {
-        setError('Could not decode that identifier.')
-        setMode('error')
+        setError("Could not decode that identifier.");
+        setMode("error");
       }
     }
     // async paths (NIP-05, Primal) are handled by the effect above
   }
 
   function handleSelectResult(pubkey: string) {
-    const result = searchResults.find((r) => r.pubkey === pubkey)
+    const result = searchResults.find((r) => r.pubkey === pubkey);
     if (result) {
-      const profile = getProfileContent(result.event)
-      setValue(getDisplayName(profile, pubkey.slice(0, 8)))
+      const profile = getProfileContent(result.event);
+      setValue(getDisplayName(profile, pubkey.slice(0, 8)));
     }
-    setSearchResults([])
-    // Setting resolvedPubkey triggers the auto-navigate effect above
-    setResolvedPubkey(pubkey)
+    setSearchResults([]);
+    setResolvedPubkey(pubkey);
   }
 
-  const isLoading = mode === 'resolving' || mode === 'searching'
+  const isLoading = mode === "resolving" || mode === "searching";
 
   return (
     <div className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-semibold text-base-content">Who are we diagnosing?</h1>
+        <h1 className="text-2xl font-semibold text-base-content">
+          Who are we diagnosing?
+        </h1>
         <p className="mt-1 text-base-content/50 text-sm">
           Search by name, or paste an npub, NIP-05, or hex pubkey.
         </p>
@@ -183,11 +192,11 @@ function StepPubkey() {
           <input
             type="text"
             className={[
-              'input input-bordered w-full pr-10 font-mono text-sm',
-              error ? 'input-error' : '',
+              "input input-bordered w-full pr-10 font-mono text-sm",
+              error ? "input-error" : "",
             ]
               .filter(Boolean)
-              .join(' ')}
+              .join(" ")}
             placeholder="npub1… or search by name"
             value={value}
             onChange={(e) => handleChange(e.target.value)}
@@ -201,20 +210,32 @@ function StepPubkey() {
               <span className="loading loading-spinner loading-xs text-base-content/40" />
             )}
           </div>
-
         </div>
 
         {searchResults.length > 0 && (
           <div className="flex flex-col divide-y divide-base-300 rounded-xl border border-base-300 overflow-hidden">
             {searchResults.map((result) => (
-              <ResultItem key={result.pubkey} result={result} onSelect={handleSelectResult} />
+              <ResultItem
+                key={result.pubkey}
+                result={result}
+                onSelect={handleSelectResult}
+              />
             ))}
           </div>
         )}
 
         {error && <p className="text-error text-sm">{error}</p>}
-        {mode === 'resolving' && (
+        {mode === "resolving" && (
           <p className="text-base-content/40 text-sm">Resolving NIP-05…</p>
+        )}
+        {resolvedPubkey && (
+          <button
+            type="button"
+            className="btn btn-primary w-full"
+            onClick={handleContinue}
+          >
+            Continue
+          </button>
         )}
       </div>
 
@@ -224,15 +245,15 @@ function StepPubkey() {
           type="button"
           className="btn btn-ghost btn-sm w-full text-base-content/50"
           onClick={() => {
-            const qs = location.search ? `${location.search}` : ''
-            navigate(`/signin${qs}`)
+            const qs = location.search ? `${location.search}` : "";
+            navigate(`/signin${qs}`);
           }}
         >
           Sign in with your own key
         </button>
       </div>
     </div>
-  )
+  );
 }
 
-export default StepPubkey
+export default StepPubkey;
