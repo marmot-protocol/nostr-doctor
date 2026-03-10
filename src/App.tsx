@@ -1,27 +1,35 @@
-import { Suspense } from 'react'
-import { Navigate, Route, Routes } from 'react-router'
 import {
   AccountsProvider,
   EventStoreProvider,
   FactoryProvider,
-} from 'applesauce-react/providers'
-import { AppProvider, useApp } from './context/AppContext.tsx'
-import { eventStore } from './lib/store.ts'
-import { manager } from './lib/accounts.ts'
-import { factory } from './lib/factory.ts'
-import PAGES from './pages/pages.tsx'
-import SignInLayout from './pages/SignIn/SignInLayout.tsx'
-import StepPubkey from './pages/SignIn/StepPubkey.tsx'
-import SignInMethods from './pages/SignIn/SignInMethods.tsx'
-import SignInMethodPage from './pages/SignIn/SignInMethodPage.tsx'
+} from "applesauce-react/providers";
+import { Suspense } from "react";
+import { Navigate, Route, Routes, useLocation } from "react-router";
+import { AppProvider, pagePath, useApp } from "./context/AppContext.tsx";
+import { manager } from "./lib/accounts.ts";
+import { factory } from "./lib/factory.ts";
+import { eventStore } from "./lib/store.ts";
+import CompleteView from "./pages/complete/index.tsx";
+import REPORTS from "./pages/reports.tsx";
+import SignInLayout from "./pages/signin/SignInLayout.tsx";
+import SignInMethodPage from "./pages/signin/SignInMethodPage.tsx";
+import SignInMethods from "./pages/signin/SignInMethods.tsx";
+import StepPubkey from "./pages/signin/StepPubkey.tsx";
 
 // ---------------------------------------------------------------------------
-// Route guard: redirect to sign-in if no subject user is set
+// Route guard: redirect to sign-in if no subject user is set (with return path)
 // ---------------------------------------------------------------------------
 function RequireSubject({ children }: { children: React.ReactNode }) {
-  const { subjectUser } = useApp()
-  if (!subjectUser) return <Navigate to="/" replace />
-  return <>{children}</>
+  const { subject: subjectUser } = useApp();
+  const location = useLocation();
+  if (!subjectUser) {
+    const returnTo =
+      location.pathname !== "/" && location.pathname !== ""
+        ? `?redirect=${encodeURIComponent(location.pathname + location.search)}`
+        : "";
+    return <Navigate to={`/${returnTo}`} replace />;
+  }
+  return <>{children}</>;
 }
 
 // ---------------------------------------------------------------------------
@@ -32,7 +40,7 @@ function PageFallback() {
     <div className="min-h-screen bg-base-100 flex items-center justify-center">
       <span className="loading loading-spinner loading-lg text-primary" />
     </div>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -40,7 +48,7 @@ function PageFallback() {
 // ---------------------------------------------------------------------------
 function AppRoutes() {
   return (
-    <AppProvider pages={PAGES}>
+    <AppProvider pages={REPORTS}>
       <Routes>
         {/* Sign-in flow — all share the card layout */}
         <Route element={<SignInLayout />}>
@@ -50,10 +58,10 @@ function AppRoutes() {
         </Route>
 
         {/* Diagnostic pages — require a subject pubkey */}
-        {PAGES.map(({ path, Component }) => (
+        {REPORTS.map(({ name, Component }) => (
           <Route
-            key={path}
-            path={path}
+            key={name}
+            path={pagePath(name)}
             element={
               <RequireSubject>
                 <Suspense fallback={<PageFallback />}>
@@ -64,11 +72,23 @@ function AppRoutes() {
           />
         ))}
 
+        {/* Complete view — terminal destination after all diagnostic pages */}
+        <Route
+          path="complete"
+          element={
+            <RequireSubject>
+              <Suspense fallback={<PageFallback />}>
+                <CompleteView />
+              </Suspense>
+            </RequireSubject>
+          }
+        />
+
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppProvider>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +103,7 @@ function App() {
         </FactoryProvider>
       </AccountsProvider>
     </EventStoreProvider>
-  )
+  );
 }
 
-export default App
+export default App;

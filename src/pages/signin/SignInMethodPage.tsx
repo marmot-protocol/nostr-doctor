@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useLocation, useNavigate, useParams } from 'react-router'
+import { useApp, getSafeRedirect } from '../../context/AppContext.tsx'
 import {
   ExtensionMissingError,
   NostrConnectSigner,
@@ -38,16 +39,18 @@ function addAndActivate(
 }
 
 // ---------------------------------------------------------------------------
-// Back button
+// Back button (preserves redirect query)
 // ---------------------------------------------------------------------------
 
 function BackButton() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const qs = location.search ?? ''
   return (
     <button
       type="button"
       className="btn btn-ghost btn-sm gap-1 -ml-2 mb-4 text-base-content/40"
-      onClick={() => navigate('/signin')}
+      onClick={() => navigate(`/signin${qs}`)}
     >
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -362,16 +365,22 @@ function isMethodId(v: string): v is MethodId {
 function SignInMethodPage() {
   const { method } = useParams<{ method: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+  const { next } = useApp()
+  const redirectTo = getSafeRedirect(location.search)
 
   function handleSignedIn() {
-    navigate('/page/1')
+    if (redirectTo) navigate(redirectTo)
+    else next()
   }
+
+  const signInQs = location.search ?? ''
 
   if (!method || !isMethodId(method)) {
     return (
       <div className="flex flex-col gap-4">
         <p className="text-error text-sm">Unknown sign-in method.</p>
-        <button className="btn btn-ghost w-full" onClick={() => navigate('/signin')}>
+        <button className="btn btn-ghost w-full" onClick={() => navigate(`/signin${signInQs}`)}>
           Back to sign-in options
         </button>
       </div>

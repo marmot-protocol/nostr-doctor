@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router'
+import { useNavigate, useLocation } from 'react-router'
 
 const METHODS = [
   {
@@ -30,6 +30,8 @@ const METHODS = [
 
 function SignInMethods() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const qs = location.search ?? ''
 
   return (
     <div className="flex flex-col gap-8">
@@ -37,7 +39,7 @@ function SignInMethods() {
         <button
           type="button"
           className="btn btn-ghost btn-sm gap-1 -ml-2 mb-4 text-base-content/40"
-          onClick={() => navigate('/')}
+          onClick={() => navigate(`/${qs}`)}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -54,7 +56,7 @@ function SignInMethods() {
             key={id}
             type="button"
             className="flex items-center justify-between py-3 hover:opacity-70 transition-opacity text-left"
-            onClick={() => navigate(`/signin/${id}`)}
+            onClick={() => navigate(`/signin/${id}${qs}`)}
           >
             <div>
               <div className="text-sm font-medium text-base-content">{label}</div>

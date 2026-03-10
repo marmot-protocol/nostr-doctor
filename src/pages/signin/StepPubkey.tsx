@@ -5,11 +5,11 @@ import {
   getProfileContent,
   getProfilePicture,
 } from 'applesauce-core/helpers'
-import { ReadonlyAccount } from 'applesauce-accounts/accounts'
 import { isNip05, queryProfile } from 'nostr-tools/nip05'
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router'
-import { manager } from '../../lib/accounts.ts'
+import { useLocation, useNavigate } from 'react-router'
+import { useApp, getSafeRedirect } from '../../context/AppContext.tsx'
+import { subjectPubkey$ } from '../../lib/subjectPubkey.ts'
 import { primal } from '../../lib/primal.ts'
 
 type SearchResult = {
@@ -66,6 +66,9 @@ function ResultItem({
 
 function StepPubkey() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const { next } = useApp()
+  const redirectTo = getSafeRedirect(location.search)
 
   const [value, setValue] = useState('')
   const [resolvedPubkey, setResolvedPubkey] = useState('')
@@ -76,14 +79,13 @@ function StepPubkey() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Auto-navigate as soon as a pubkey is resolved (direct identifiers, NIP-05)
+  // Auto-navigate as soon as a pubkey is resolved (subject only; no active account)
   useEffect(() => {
     if (!resolvedPubkey) return
-    const account = ReadonlyAccount.fromPubkey(resolvedPubkey)
-    manager.addAccount(account)
-    manager.setActive(account)
-    navigate('/page/1')
-  }, [resolvedPubkey, navigate])
+    subjectPubkey$.next(resolvedPubkey)
+    if (redirectTo) navigate(redirectTo)
+    else next()
+  }, [resolvedPubkey, navigate, redirectTo, next])
 
   // Kick off async resolution whenever value changes.
   // Synchronous state resets happen in handleChange to avoid setState-in-effect.
@@ -226,7 +228,10 @@ function StepPubkey() {
         <button
           type="button"
           className="btn btn-ghost btn-sm w-full text-base-content/50"
-          onClick={() => navigate('/signin')}
+          onClick={() => {
+            const qs = location.search ? `${location.search}` : ''
+            navigate(`/signin${qs}`)
+          }}
         >
           Sign in with your own key
         </button>
