@@ -1,6 +1,5 @@
 import { Navigate } from "react-router";
 import { use$ } from "applesauce-react/hooks";
-import { ReadonlyAccount } from "applesauce-accounts/accounts";
 import { useReport } from "../../context/ReportContext.tsx";
 import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
 import { draftEvents$ } from "../../lib/draftEvents.ts";
@@ -12,27 +11,20 @@ import ReadOnlyView from "./ReadOnlyView.tsx";
 // CompleteView — orchestrator
 //
 // Resolves which branch to render based on two orthogonal questions:
-//   1. Is there a signer? (read-only vs signed-in)
-//   2. Is the signer the same person as the subject? (self vs cross-user)
+//   1. Is there an account? (read-only vs signed-in)
+//   2. Is the account the same person as the subject? (self vs cross-user)
 //
-// All state is read from BehaviorSubjects — no async useEffect races.
-// manager.active$ is a BehaviorSubject that always holds the current account
-// synchronously, so signerPubkey is available without getPublicKey().
+// All state is read from ReportContext (account) and subjectPubkey$.
 // ---------------------------------------------------------------------------
 
 function CompleteView() {
-  const { signer } = useReport();
+  const { account } = useReport();
 
   // Stable identity of the person being diagnosed
   const originalSubjectPubkey = use$(subjectPubkey$);
 
-  // Active account — synchronous BehaviorSubject. ReadonlyAccount has a pubkey
-  // but no real signer, so we exclude it when determining the signer identity.
-  const activeAccount = use$(manager.active$);
-  const signerPubkey =
-    activeAccount && !(activeAccount instanceof ReadonlyAccount)
-      ? activeAccount.pubkey
-      : null;
+  // Signer pubkey from the active account (same source as context)
+  const signerPubkey = account?.pubkey ?? null;
 
   const draftEvents = use$(draftEvents$);
 
@@ -48,7 +40,7 @@ function CompleteView() {
     });
   }
 
-  const isReadOnly = signer === null;
+  const isReadOnly = account === null;
   const isCrossUser =
     !isReadOnly &&
     signerPubkey !== null &&

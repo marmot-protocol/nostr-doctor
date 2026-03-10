@@ -12,6 +12,7 @@ import {
 import { manager } from "../../lib/accounts.ts";
 import { DEFAULT_RELAY_FOR_REMOTE_SIGNER_QR, pool } from "../../lib/relay.ts";
 import { getSafeRedirect, REPORT_PAGE_BASE } from "../../lib/routing.ts";
+import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
 
 // Wire NostrConnectSigner to use our shared RelayPool once at module load
 NostrConnectSigner.subscriptionMethod = pool.subscription.bind(pool);
@@ -20,6 +21,11 @@ NostrConnectSigner.publishMethod = pool.publish.bind(pool);
 function addAndActivate(account: ExtensionAccount | NostrConnectAccount) {
   manager.addAccount(account);
   manager.setActive(account);
+  // If no subject has been set yet (user came directly to sign-in without
+  // entering a pubkey), treat the signer's own pubkey as the diagnostic subject.
+  if (!subjectPubkey$.getValue()) {
+    subjectPubkey$.next(account.pubkey);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,6 @@ import { firstValueFrom } from "rxjs";
 import { getOutboxes } from "applesauce-core/helpers";
 import type { EventTemplate } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
-import { ReadonlyAccount } from "applesauce-accounts/accounts";
 import { parseReferralParams, decodeReferralJsonl } from "../../lib/blossom.ts";
 import {
   referralPack$,
@@ -156,10 +155,9 @@ function ReferralPage() {
   // Read BehaviorSubjects — synchronous, no useEffect race
   const pack = use$(referralPack$);
   // Derive isSignedIn from manager.active$ — a BehaviorSubject, always current.
-  // ReadonlyAccount has a pubkey but no signer; exclude it.
+  // We never create ReadonlyAccount, so any active account is a real signer.
   const activeAccount = use$(manager.active$);
-  const isSignedIn =
-    activeAccount !== undefined && !(activeAccount instanceof ReadonlyAccount);
+  const isSignedIn = activeAccount !== undefined;
 
   const [phase, setPhase] = useState<Phase>(() => {
     // If we already have the pack cached (returning from sign-in), skip loading

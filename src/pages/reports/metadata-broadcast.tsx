@@ -9,6 +9,8 @@ import { pool, LOOKUP_RELAYS } from "../../lib/relay.ts";
 const OUTBOX_LOAD_TIMEOUT_MS = 8_000;
 /** ms to wait per relay request before treating it as complete */
 const RELAY_REQUEST_TIMEOUT_MS = 8_000;
+/** ms after which we stop waiting for publish and go to next report */
+const BROADCAST_TIMEOUT_MS = 25_000;
 
 // ---------------------------------------------------------------------------
 // Metadata kinds we check for
@@ -197,21 +199,19 @@ function MetadataBroadcast() {
 
   // After timeout, outboxes will be undefined still (EMPTY never emits).
   // We need a separate flag for "outbox phase done".
-  const [outboxPhaseComplete, setOutboxPhaseComplete] = useState(false);
+  const [outboxTimedOut, setOutboxTimedOut] = useState(false);
 
   useEffect(() => {
     if (!subjectUser) return;
     const timer = setTimeout(
-      () => setOutboxPhaseComplete(true),
+      () => setOutboxTimedOut(true),
       OUTBOX_LOAD_TIMEOUT_MS + 100,
     );
     return () => clearTimeout(timer);
   }, [subjectUser]);
 
-  // Mark outbox phase complete as soon as we have a real value
-  useEffect(() => {
-    if (outboxesLoaded) setOutboxPhaseComplete(true);
-  }, [outboxesLoaded]);
+  // Outbox phase is complete once we have a real value OR the timer fired
+  const outboxPhaseComplete = outboxesLoaded || outboxTimedOut;
 
   // ---------------------------------------------------------------------------
   // Relay list — union of outbox relays + LOOKUP_RELAYS
@@ -247,18 +247,23 @@ function MetadataBroadcast() {
   useEffect(() => {
     if (!outboxPhaseComplete || !subjectUser || allRelays.length === 0) return;
 
-    const subscriptions: { unsubscribe: () => void }[] = [];
+    const subscriptions: { url: string; unsubscribe: () => void }[] = [];
+
+    // Batch-initialize all new relay states as "checking" before subscribing
+    const newRelays = allRelays.filter(
+      (url) => !fetchedRelays.current.has(url),
+    );
+    if (newRelays.length > 0) {
+      setRelayStates((prev) => {
+        const next = new Map(prev);
+        for (const url of newRelays) next.set(url, "checking");
+        return next;
+      });
+    }
 
     for (const relayUrl of allRelays) {
       if (fetchedRelays.current.has(relayUrl)) continue;
       fetchedRelays.current.add(relayUrl);
-
-      // Mark as checking
-      setRelayStates((prev) => {
-        const next = new Map(prev);
-        next.set(relayUrl, "checking");
-        return next;
-      });
 
       const relay = pool.relay(relayUrl);
       const sub = relay
@@ -297,11 +302,14 @@ function MetadataBroadcast() {
           },
         });
 
-      subscriptions.push(sub);
+      subscriptions.push({ url: relayUrl, unsubscribe: sub.unsubscribe.bind(sub) });
     }
 
     return () => {
-      for (const sub of subscriptions) sub.unsubscribe();
+      for (const { url, unsubscribe } of subscriptions) {
+        unsubscribe();
+        fetchedRelays.current.delete(url);
+      }
     };
   }, [outboxPhaseComplete, subjectUser, allRelays]);
 
@@ -344,6 +352,8 @@ function MetadataBroadcast() {
   const [broadcasting, setBroadcasting] = useState(false);
   const [done, setDone] = useState(false);
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
+  /** Number of events that have finished publishing (resolve or reject) */
+  const [publishProgress, setPublishProgress] = useState(0);
 
   function handleBroadcast() {
     if (bestEventsByKind.size === 0) {
@@ -353,19 +363,38 @@ function MetadataBroadcast() {
 
     setBroadcasting(true);
     setBroadcastError(null);
+    setPublishProgress(0);
 
-    try {
-      for (const event of bestEventsByKind.values()) {
-        // Fire-and-forget: publish already-signed events to all checked relays
-        void pool.publish(allRelays, event);
+    const events = Array.from(bestEventsByKind.values());
+    const total = events.length;
+    // Track settled count in a closure variable; update React state for UI,
+    // and mark done once all promises have settled — all in async callbacks,
+    // never synchronously inside an effect.
+    let settled = 0;
+
+    function onSettled() {
+      settled += 1;
+      setPublishProgress(settled);
+      if (settled >= total) {
+        setDone(true);
+        setBroadcasting(false);
       }
-      setDone(true);
-    } catch (e) {
-      setBroadcastError(e instanceof Error ? e.message : "Broadcast failed.");
-    } finally {
-      setBroadcasting(false);
+    }
+
+    for (const event of events) {
+      pool.publish(allRelays, event).then(onSettled).catch(onSettled);
     }
   }
+
+  // If broadcast takes too long, go to next report
+  useEffect(() => {
+    if (!broadcasting) return;
+    const timer = setTimeout(() => {
+      setBroadcasting(false);
+      next();
+    }, BROADCAST_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [broadcasting, next]);
 
   // Auto-advance after done
   useEffect(() => {
@@ -438,6 +467,44 @@ function MetadataBroadcast() {
             <span className="loading loading-dots loading-sm text-base-content/40" />
             <button className="btn btn-ghost btn-sm" onClick={next}>
               Next
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Render: broadcasting (progress bar + timeout)
+  // ---------------------------------------------------------------------------
+  if (broadcasting && bestEventsByKind.size > 0) {
+    const total = bestEventsByKind.size;
+    return (
+      <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6 items-center">
+            <span className="loading loading-spinner loading-lg text-primary" />
+            <div className="text-center w-full">
+              <h2 className="text-lg font-semibold text-base-content">
+                Broadcasting metadata…
+              </h2>
+              <p className="text-sm text-base-content/60 mt-1">
+                {publishProgress} of {total} {total === 1 ? "event" : "events"}{" "}
+                published
+              </p>
+            </div>
+            <div className="w-full flex flex-col gap-1">
+              <progress
+                className="progress progress-primary w-full"
+                value={publishProgress}
+                max={total}
+              />
+            </div>
+            <p className="text-xs text-base-content/40">
+              This may take a moment. You can skip to continue.
+            </p>
+            <button className="btn btn-ghost btn-sm" onClick={next}>
+              Skip
             </button>
           </div>
         </div>

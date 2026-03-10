@@ -1,8 +1,7 @@
-import { ReadonlyAccount } from "applesauce-accounts/accounts";
+import type { IAccount } from "applesauce-accounts";
 import { castUser, type User } from "applesauce-common/casts";
-import type { EventTemplate } from "applesauce-core/helpers";
+import { relaySet, type EventTemplate } from "applesauce-core/helpers";
 import { use$, useActiveAccount } from "applesauce-react/hooks";
-import type { ISigner } from "applesauce-signers";
 import {
   createContext,
   use,
@@ -12,12 +11,12 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { draftEvents$ } from "../lib/draftEvents.ts";
 import { factory } from "../lib/factory.ts";
 import { DEFAULT_RELAYS, pool } from "../lib/relay.ts";
+import { pagePath } from "../lib/routing.ts";
 import { eventStore } from "../lib/store.ts";
 import { subjectPubkey$ } from "../lib/subjectPubkey.ts";
-import { draftEvents$ } from "../lib/draftEvents.ts";
-import { pagePath } from "../lib/routing.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,16 +32,16 @@ export type ReportContextValue = {
   /** The user currently being diagnosed */
   subject: User | null;
 
-  /** Active signer when signed in; null in read-only mode */
-  signer: ISigner | null;
+  /** Active account when signed in; null in read-only mode */
+  account: IAccount | null;
 
   /** Navigate to the next page in the report sequence */
   next: () => void;
 
   /**
    * Accepts only unsigned EventTemplate objects.
-   * - Signer present: signs and publishes immediately.
-   * - Signer null: queues into draftEvents$ for the final step.
+   * - Account present: signs and publishes immediately.
+   * - Account null: queues into draftEvents$ for the final step.
    */
   publish: (template: EventTemplate) => Promise<void>;
 };
@@ -68,14 +67,12 @@ export function ReportProvider({ pages, children }: ReportProviderProps) {
 
   const activeAccount = useActiveAccount();
   const subjectPubkey = use$(subjectPubkey$);
-  const hasRealSigner =
-    activeAccount && !(activeAccount instanceof ReadonlyAccount);
-  const subjectUser: User | null = hasRealSigner
-    ? castUser(activeAccount.pubkey, eventStore)
-    : subjectPubkey
-      ? castUser(subjectPubkey, eventStore)
-      : null;
-  const signer: ISigner | null = hasRealSigner ? activeAccount.signer : null;
+  // Subject is always the pubkey being diagnosed — never the signer's pubkey.
+  // The account is the signed-in identity used only for signing events.
+  const subjectUser: User | null = subjectPubkey
+    ? castUser(subjectPubkey, eventStore)
+    : null;
+  const account: IAccount | null = activeAccount ?? null;
 
   const next = useCallback(() => {
     const currentIndex = pages.findIndex(
@@ -93,27 +90,23 @@ export function ReportProvider({ pages, children }: ReportProviderProps) {
     navigate(pagePath(pages[currentIndex + 1].name), replace);
   }, [pages, location.pathname, navigate]);
 
+  const outboxes = use$(() => subjectUser?.outboxes$, [subjectUser]);
   const publish = useCallback(
     async (template: EventTemplate) => {
-      if (signer === null) {
+      if (account === null) {
         draftEvents$.next([...draftEvents$.getValue(), template]);
         return;
       }
 
       const signed = await factory.sign(template);
-      const user = subjectUser;
-      if (!user) return;
-      const outboxes = await user.outboxes$.$first(3000);
-      const relays =
-        outboxes && outboxes.length > 0 ? outboxes : DEFAULT_RELAYS;
-      await pool.publish(relays, signed);
+      await pool.publish(relaySet(outboxes, DEFAULT_RELAYS), signed);
     },
-    [signer, subjectUser],
+    [account?.pubkey, outboxes?.join(", ")],
   );
 
   const value: ReportContextValue = {
     subject: subjectUser,
-    signer,
+    account,
     next,
     publish,
   };

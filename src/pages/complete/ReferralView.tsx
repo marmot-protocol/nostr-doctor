@@ -25,14 +25,14 @@ type LinkState =
   | { status: "error"; message: string };
 
 function useReferralLink(draftEvents: EventTemplate[], subjectPubkey: string) {
-  const { signer } = useReport();
+  const { account } = useReport();
   const [linkState, setLinkState] = useState<LinkState>({ status: "idle" });
 
   const createLink = useCallback(async () => {
-    if (!signer) return;
+    if (!account) return;
     setLinkState({ status: "loading" });
     try {
-      const uploaderPubkey = await signer.getPublicKey();
+      const uploaderPubkey = await account.signer.getPublicKey();
       const serverUrls = await firstValueFrom(
         eventStore.model(UserBlossomServersModel, uploaderPubkey).pipe(
           timeout(3000),
@@ -47,7 +47,7 @@ function useReferralLink(draftEvents: EventTemplate[], subjectPubkey: string) {
       const url = await createReferralLink(
         draftEvents,
         subjectPubkey,
-        signer,
+        account.signer,
         servers,
       );
       setLinkState({ status: "success", url });
@@ -58,7 +58,7 @@ function useReferralLink(draftEvents: EventTemplate[], subjectPubkey: string) {
           e instanceof Error ? e.message : "Failed to create referral link.",
       });
     }
-  }, [signer, draftEvents, subjectPubkey]);
+  }, [account, draftEvents, subjectPubkey]);
 
   const reset = useCallback(() => setLinkState({ status: "idle" }), []);
 
@@ -75,7 +75,7 @@ function useReferralLink(draftEvents: EventTemplate[], subjectPubkey: string) {
 
 function ReferralView() {
   const navigate = useNavigate();
-  const { signer } = useReport();
+  const { account } = useReport();
 
   // subjectPubkey$ holds the original subject (the person being diagnosed).
   // After sign-in, ReportContext.subject switches to the signer's identity,
@@ -92,9 +92,9 @@ function ReferralView() {
   );
   const [copied, setCopied] = useState(false);
 
-  // Guard: no signer — redirect to sign-in with return path to this page.
+  // Guard: no account — redirect to sign-in with return path to this page.
   // All hooks are called above this early return to satisfy rules-of-hooks.
-  if (!signer) {
+  if (!account) {
     return (
       <Navigate
         to={`/signin?redirect=${encodeURIComponent("/complete/referral")}`}

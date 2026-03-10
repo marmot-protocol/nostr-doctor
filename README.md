@@ -53,7 +53,6 @@ Nostr Doctor is a guided diagnostic and repair tool for Nostr users. Enter a pub
 ## UI/UX Notes
 
 - One thing at a time (even one relay)—show each one-by-one.
-- Each button click publishes a change in the flow.
 - Fix via signer or export bundle of unsigned events (ZIP/Blossom/HTT) for referral/bulk signing.
 - Use applesauce.
 - DaisyUI components.
