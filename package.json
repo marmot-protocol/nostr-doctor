@@ -11,15 +11,21 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@libs/qrcode": "jsr:^3.0.1",
     "@tailwindcss/vite": "^4.2.1",
     "applesauce-accounts": "^5.1.0",
     "applesauce-common": "^5.1.0",
     "applesauce-core": "^5.1.0",
+    "applesauce-extra": "^5.0.0",
+    "applesauce-loaders": "^5.1.0",
+    "applesauce-react": "^5.1.0",
     "applesauce-relay": "^5.1.0",
     "applesauce-signers": "^5.1.0",
+    "nostr-tools": "^2.23.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router": "^7.13.1",
+    "rxjs": "^7.8.2",
     "tailwindcss": "^4.2.1"
   },
   "devDependencies": {

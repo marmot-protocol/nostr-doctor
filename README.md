@@ -1,9 +1,11 @@
 # Nostr Doctor - nostr.doctor
 
 ## Overview
+
 Nostr Doctor is a guided diagnostic and repair tool for Nostr users. Enter a pubkey (yours or someone else's), sign in if needed, and get a personalized flow to fix common issues: dead relays, bloated follow lists, oversized profile images, NIP-05 drift, poor indexer coverage, and more.
 
 **Core Philosophy:**
+
 - One issue at a time
 - Boring, trustworthy design (white page, Typeform-style steps).
 - Every button publishes a fix (signer-integrated).
@@ -16,6 +18,7 @@ Nostr Doctor is a guided diagnostic and repair tool for Nostr users. Enter a pub
 **Goal:** Clean up \"broken shit everywhere\" on Nostr—better UX, network health, marketing hook (\"I nuked your zombie relays!\").
 
 ## MVP Features
+
 - **Relay Doctor:**
   - Counts per list type (2-5 recommended).
   - Liveness + NIP-66 RTT/ping (global monitors).
@@ -48,6 +51,7 @@ Nostr Doctor is a guided diagnostic and repair tool for Nostr users. Enter a pub
   - Export unsigned events for referral/bulk fix.
 
 ## UI/UX Notes
+
 - One thing at a time (even one relay)—show each one-by-one.
 - Each button click publishes a change in the flow.
 - Fix via signer or export bundle of unsigned events (ZIP/Blossom/HTT) for referral/bulk signing.
