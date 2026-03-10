@@ -43,7 +43,7 @@ function ResultItem({
   return (
     <button
       type="button"
-      className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-base-200 transition-colors text-left"
+      className="flex items-center gap-3 w-full px-4 py-3 hover:bg-base-200 active:bg-base-300 transition-colors text-left"
       onClick={() => onSelect(result.pubkey)}
     >
       <img
@@ -75,7 +75,6 @@ function StepPubkey() {
   const [mode, setMode] = useState<InputMode>('idle')
   const [error, setError] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
-  const [showDropdown, setShowDropdown] = useState(false)
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -117,7 +116,6 @@ function StepPubkey() {
             .filter((e) => e.kind === 0)
             .map((e) => ({ pubkey: e.pubkey, event: e }))
           setSearchResults(results)
-          setShowDropdown(results.length > 0)
           setMode('idle')
         } catch {
           setError('Search failed. Try again or paste a pubkey directly.')
@@ -137,7 +135,6 @@ function StepPubkey() {
     setError('')
     setResolvedPubkey('')
     setSearchResults([])
-    setShowDropdown(false)
     if (debounceRef.current) clearTimeout(debounceRef.current)
 
     const trimmed = newValue.trim()
@@ -165,7 +162,6 @@ function StepPubkey() {
       const profile = getProfileContent(result.event)
       setValue(getDisplayName(profile, pubkey.slice(0, 8)))
     }
-    setShowDropdown(false)
     setSearchResults([])
     // Setting resolvedPubkey triggers the auto-navigate effect above
     setResolvedPubkey(pubkey)
@@ -195,8 +191,6 @@ function StepPubkey() {
             placeholder="npub1… or search by name"
             value={value}
             onChange={(e) => handleChange(e.target.value)}
-            onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
-            onFocus={() => { if (searchResults.length > 0) setShowDropdown(true) }}
             autoFocus
             spellCheck={false}
             autoComplete="off"
@@ -208,14 +202,15 @@ function StepPubkey() {
             )}
           </div>
 
-          {showDropdown && searchResults.length > 0 && (
-            <div className="absolute z-10 w-full mt-1 bg-base-100 border border-base-300 rounded-xl shadow-lg overflow-hidden">
-              {searchResults.map((result) => (
-                <ResultItem key={result.pubkey} result={result} onSelect={handleSelectResult} />
-              ))}
-            </div>
-          )}
         </div>
+
+        {searchResults.length > 0 && (
+          <div className="flex flex-col divide-y divide-base-300 rounded-xl border border-base-300 overflow-hidden">
+            {searchResults.map((result) => (
+              <ResultItem key={result.pubkey} result={result} onSelect={handleSelectResult} />
+            ))}
+          </div>
+        )}
 
         {error && <p className="text-error text-sm">{error}</p>}
         {mode === 'resolving' && (
