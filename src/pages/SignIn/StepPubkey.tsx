@@ -5,10 +5,11 @@ import {
   getProfileContent,
   getProfilePicture,
 } from 'applesauce-core/helpers'
+import { ReadonlyAccount } from 'applesauce-accounts/accounts'
 import { isNip05, queryProfile } from 'nostr-tools/nip05'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useApp } from '../../context/AppContext.tsx'
+import { manager } from '../../lib/accounts.ts'
 import { primal } from '../../lib/primal.ts'
 
 type SearchResult = {
@@ -65,7 +66,6 @@ function ResultItem({
 
 function StepPubkey() {
   const navigate = useNavigate()
-  const { setSubject } = useApp()
 
   const [value, setValue] = useState('')
   const [resolvedPubkey, setResolvedPubkey] = useState('')
@@ -75,6 +75,15 @@ function StepPubkey() {
   const [showDropdown, setShowDropdown] = useState(false)
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Auto-navigate as soon as a pubkey is resolved (direct identifiers, NIP-05)
+  useEffect(() => {
+    if (!resolvedPubkey) return
+    const account = ReadonlyAccount.fromPubkey(resolvedPubkey)
+    manager.addAccount(account)
+    manager.setActive(account)
+    navigate('/page/1')
+  }, [resolvedPubkey, navigate])
 
   // Kick off async resolution whenever value changes.
   // Synchronous state resets happen in handleChange to avoid setState-in-effect.
@@ -154,78 +163,47 @@ function StepPubkey() {
       const profile = getProfileContent(result.event)
       setValue(getDisplayName(profile, pubkey.slice(0, 8)))
     }
-    setResolvedPubkey(pubkey)
     setShowDropdown(false)
     setSearchResults([])
-  }
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (mode === 'resolving' || mode === 'searching') return
-
-    const trimmed = value.trim()
-    if (!trimmed) {
-      setError('Please enter a name, npub, NIP-05 address, or hex pubkey.')
-      return
-    }
-
-    const pubkey = resolvedPubkey || decodeProfilePointer(trimmed)?.pubkey
-    if (!pubkey) {
-      setError('Enter a valid npub, nprofile, NIP-05 address, or hex pubkey.')
-      return
-    }
-
-    setSubject(pubkey)
-    navigate('/signin')
+    // Setting resolvedPubkey triggers the auto-navigate effect above
+    setResolvedPubkey(pubkey)
   }
 
   const isLoading = mode === 'resolving' || mode === 'searching'
-  const isReady = !!resolvedPubkey && !isLoading
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-semibold text-base-content">
-          Who are we diagnosing?
-        </h1>
-        <p className="mt-1 text-base-content/60 text-sm">
-          Enter a name, npub, NIP-05 address, or hex pubkey. Sign in on the
-          next step to publish fixes.
+        <h1 className="text-2xl font-semibold text-base-content">Who are we diagnosing?</h1>
+        <p className="mt-1 text-base-content/50 text-sm">
+          Search by name, or paste an npub, NIP-05, or hex pubkey.
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3">
         <div className="relative">
-          <div className="relative">
-            <input
-              type="text"
-              className={[
-                'input input-bordered w-full pr-10 font-mono text-sm',
-                error ? 'input-error' : '',
-                isReady ? 'input-success' : '',
-              ]
-                .filter(Boolean)
-                .join(' ')}
-              placeholder="npub1…, name@domain.com, or search by name"
-              value={value}
-              onChange={(e) => handleChange(e.target.value)}
-              onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
-              onFocus={() => { if (searchResults.length > 0) setShowDropdown(true) }}
-              autoFocus
-              spellCheck={false}
-              autoComplete="off"
-            />
+          <input
+            type="text"
+            className={[
+              'input input-bordered w-full pr-10 font-mono text-sm',
+              error ? 'input-error' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            placeholder="npub1… or search by name"
+            value={value}
+            onChange={(e) => handleChange(e.target.value)}
+            onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
+            onFocus={() => { if (searchResults.length > 0) setShowDropdown(true) }}
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+          />
 
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-              {isLoading && (
-                <span className="loading loading-spinner loading-xs text-base-content/40" />
-              )}
-              {isReady && (
-                <svg className="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              )}
-            </div>
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+            {isLoading && (
+              <span className="loading loading-spinner loading-xs text-base-content/40" />
+            )}
           </div>
 
           {showDropdown && searchResults.length > 0 && (
@@ -239,29 +217,20 @@ function StepPubkey() {
 
         {error && <p className="text-error text-sm">{error}</p>}
         {mode === 'resolving' && (
-          <p className="text-base-content/50 text-sm">Resolving NIP-05 address…</p>
+          <p className="text-base-content/40 text-sm">Resolving NIP-05…</p>
         )}
-        {mode === 'searching' && (
-          <p className="text-base-content/50 text-sm">Searching Primal…</p>
-        )}
-        {isReady && (
-          <p className="text-base-content/40 text-sm font-mono truncate">✓ {resolvedPubkey}</p>
-        )}
+      </div>
 
-        <button type="submit" className="btn btn-primary w-full" disabled={isLoading}>
-          Next
-        </button>
-
-        <div className="divider text-sm text-base-content/40">or</div>
-
+      <div className="flex flex-col gap-2">
+        <p className="text-xs text-base-content/30 text-center">or</p>
         <button
           type="button"
-          className="btn btn-ghost w-full"
+          className="btn btn-ghost btn-sm w-full text-base-content/50"
           onClick={() => navigate('/signin')}
         >
           Sign in with your own key
         </button>
-      </form>
+      </div>
     </div>
   )
 }

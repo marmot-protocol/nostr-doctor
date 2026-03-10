@@ -13,7 +13,6 @@ import {
   PrivateKeyAccount,
 } from 'applesauce-accounts/accounts'
 import { qrcode } from '@libs/qrcode'
-import { useApp } from '../../context/AppContext.tsx'
 import { manager } from '../../lib/accounts.ts'
 import { DEFAULT_RELAYS, pool } from '../../lib/relay.ts'
 
@@ -25,7 +24,7 @@ NostrConnectSigner.publishMethod = pool.publish.bind(pool)
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-type SignedInHandler = (pubkey: string) => void
+type SignedInHandler = () => void
 
 function addAndActivate(
   account:
@@ -47,7 +46,7 @@ function BackButton() {
   return (
     <button
       type="button"
-      className="btn btn-ghost btn-sm gap-1 -ml-2 mb-3 text-base-content/50"
+      className="btn btn-ghost btn-sm gap-1 -ml-2 mb-4 text-base-content/40"
       onClick={() => navigate('/signin')}
     >
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -72,7 +71,7 @@ function ExtensionMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
     try {
       const account = await ExtensionAccount.fromExtension()
       addAndActivate(account)
-      onSignedIn(account.pubkey)
+      onSignedIn()
     } catch (err) {
       if (err instanceof ExtensionMissingError) {
         setError('No Nostr browser extension found. Install one (e.g. Alby, nos2x) and try again.')
@@ -85,11 +84,11 @@ function ExtensionMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div>
         <BackButton />
         <h1 className="text-2xl font-semibold text-base-content">Browser extension</h1>
-        <p className="mt-1 text-base-content/60 text-sm">
+        <p className="mt-1 text-base-content/50 text-sm">
           Connect using a NIP-07 browser extension like Alby or nos2x. Your
           private key never leaves the extension.
         </p>
@@ -120,7 +119,7 @@ function PrivateKeyMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
       const pubkey = await signer.getPublicKey()
       const account = new PrivateKeyAccount(pubkey, signer)
       addAndActivate(account)
-      onSignedIn(pubkey)
+      onSignedIn()
     } catch {
       setError('Invalid private key. Enter a valid nsec or hex key.')
     } finally {
@@ -129,11 +128,11 @@ function PrivateKeyMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-6">
+    <form onSubmit={submit} className="flex flex-col gap-8">
       <div>
         <BackButton />
         <h1 className="text-2xl font-semibold text-base-content">Private key</h1>
-        <p className="mt-1 text-base-content/60 text-sm">
+        <p className="mt-1 text-base-content/50 text-sm">
           Paste your nsec or hex private key. It is held in memory only and
           never sent anywhere.
         </p>
@@ -177,7 +176,7 @@ function PasswordMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
       const pubkey = await signer.getPublicKey()
       const account = new PasswordAccount(pubkey, signer)
       addAndActivate(account)
-      onSignedIn(pubkey)
+      onSignedIn()
     } catch {
       setError('Failed to decrypt. Check your ncryptsec and password.')
     } finally {
@@ -186,11 +185,11 @@ function PasswordMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-6">
+    <form onSubmit={submit} className="flex flex-col gap-8">
       <div>
         <BackButton />
         <h1 className="text-2xl font-semibold text-base-content">Encrypted key (NIP-49)</h1>
-        <p className="mt-1 text-base-content/60 text-sm">
+        <p className="mt-1 text-base-content/50 text-sm">
           Paste your <span className="font-mono text-xs">ncryptsec</span> and
           the password used to encrypt it.
         </p>
@@ -241,7 +240,7 @@ function BunkerMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
       const pubkey = await signer.getPublicKey()
       const account = new NostrConnectAccount(pubkey, signer)
       addAndActivate(account)
-      onSignedIn(pubkey)
+      onSignedIn()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to connect to bunker.')
     } finally {
@@ -250,11 +249,11 @@ function BunkerMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-6">
+    <form onSubmit={submit} className="flex flex-col gap-8">
       <div>
         <BackButton />
         <h1 className="text-2xl font-semibold text-base-content">Nostr Connect</h1>
-        <p className="mt-1 text-base-content/60 text-sm">
+        <p className="mt-1 text-base-content/50 text-sm">
           Paste the <span className="font-mono text-xs">bunker://</span> URI
           from your remote signer (e.g. nsecBunker, Citrine).
         </p>
@@ -302,7 +301,7 @@ function NostrConnectMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
         if (cancelled) return
         const account = new NostrConnectAccount(pubkey, signerInstance)
         addAndActivate(account)
-        onSignedIn(pubkey)
+        onSignedIn()
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Connection failed.')
       }
@@ -318,11 +317,11 @@ function NostrConnectMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
   }, [])
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div>
         <BackButton />
         <h1 className="text-2xl font-semibold text-base-content">Nostr Connect — QR</h1>
-        <p className="mt-1 text-base-content/60 text-sm">
+        <p className="mt-1 text-base-content/50 text-sm">
           Scan with your Nostr signer app (e.g. Amber, Nsec.app).
         </p>
       </div>
@@ -363,10 +362,8 @@ function isMethodId(v: string): v is MethodId {
 function SignInMethodPage() {
   const { method } = useParams<{ method: string }>()
   const navigate = useNavigate()
-  const { setSubject } = useApp()
 
-  function handleSignedIn(pubkey: string) {
-    setSubject(pubkey)
+  function handleSignedIn() {
     navigate('/page/1')
   }
 

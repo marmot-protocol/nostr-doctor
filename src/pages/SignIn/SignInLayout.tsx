@@ -14,10 +14,7 @@ function SignInLayout() {
           </p>
         </div>
 
-        {/* Card */}
-        <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm">
-          <Outlet />
-        </div>
+        <Outlet />
       </div>
     </div>
   )

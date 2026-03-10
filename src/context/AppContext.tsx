@@ -10,6 +10,7 @@ import {
 import { useNavigate, useLocation } from "react-router";
 import type { EventTemplate } from "applesauce-core/helpers";
 import { ReadonlyAccount } from "applesauce-accounts/accounts";
+import { useActiveAccount } from "applesauce-react/hooks";
 import { castUser, type User } from "applesauce-common/casts";
 import { manager } from "../lib/accounts.ts";
 import { factory } from "../lib/factory.ts";
@@ -28,23 +29,22 @@ export type PageDefinition = {
 };
 
 export type AppContextValue = {
-  /** The user currently being diagnosed (from castUser; may differ from signed-in user) */
+  /** The user currently being diagnosed — derived from the active account's pubkey */
   subjectUser: User | null;
-  /** Set the subject by pubkey; subjectUser is derived via castUser */
-  setSubject: (pubkey: string) => void;
 
   /** Navigate to the next page in the PAGES array */
   next: () => void;
 
   /**
-   * Accepts only unsigned EventTemplate objects. Signing is handled at this level when
-   * the user has a real signer; publishing is handled here. If the user is in read-only
-   * mode (no account or ReadonlyAccount), the template is not signed and MUST be
-   * collected into draftEvents so it can be packaged in the final step.
+   * Accepts only unsigned EventTemplate objects (no signed events).
+   * - When the user has a real signer: signing and publishing are both handled here.
+   * - When the user is in read-only mode (no account or ReadonlyAccount): the template
+   *   is NOT signed and MUST be collected into draftEvents so the app can package them
+   *   in the final step.
    */
   publishEvent: (template: EventTemplate) => Promise<void>;
 
-  /** Unsigned EventTemplate objects collected in read-only mode for the final step */
+  /** Unsigned EventTemplate objects collected when in read-only mode; package in final step */
   draftEvents: EventTemplate[];
 };
 
@@ -67,11 +67,13 @@ export function AppProvider({ pages, children }: AppProviderProps) {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [subjectPubkey, setSubjectPubkey] = useState("");
   const [draftEvents, setDraftEvents] = useState<EventTemplate[]>([]);
 
-  const subjectUser = subjectPubkey ? castUser(subjectPubkey, eventStore) : null;
-  const setSubject = useCallback((pubkey: string) => setSubjectPubkey(pubkey), []);
+  // subjectUser is derived from the currently active account — no separate state needed
+  const activeAccount = useActiveAccount();
+  const subjectUser: User | null = activeAccount
+    ? castUser(activeAccount.pubkey, eventStore)
+    : null;
 
   const next = useCallback(() => {
     const currentIndex = pages.findIndex((p) => p.path === location.pathname);
@@ -84,10 +86,12 @@ export function AppProvider({ pages, children }: AppProviderProps) {
     const isReadOnly = !active || active instanceof ReadonlyAccount;
 
     if (isReadOnly) {
+      // MUST collect unsigned templates for packaging in the final step
       setDraftEvents((prev) => [...prev, template]);
       return;
     }
 
+    // Sign at app level, then publish
     const signed = await factory.sign(template);
     const user = castUser(active.pubkey, eventStore);
     const outboxes = await user.outboxes$.$first(3000);
@@ -97,7 +101,6 @@ export function AppProvider({ pages, children }: AppProviderProps) {
 
   const value: AppContextValue = {
     subjectUser,
-    setSubject,
     next,
     publishEvent,
     draftEvents,
