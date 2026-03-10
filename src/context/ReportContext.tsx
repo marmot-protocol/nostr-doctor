@@ -101,7 +101,8 @@ export function ReportProvider({ pages, children }: ReportProviderProps) {
       const signed = await factory.sign(template);
       await pool.publish(relaySet(outboxes, DEFAULT_RELAYS), signed);
     },
-    [account?.pubkey, outboxes?.join(", ")],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [account, outboxes?.join(",")],
   );
 
   const value: ReportContextValue = {

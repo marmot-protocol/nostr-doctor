@@ -1,6 +1,7 @@
 import { RelayMonitor } from "applesauce-common/casts";
 import { RELAY_MONITOR_ANNOUNCEMENT_KIND } from "applesauce-common/helpers";
 import { castEventStream } from "applesauce-common/observable";
+import { normalizeURL, relaySet } from "applesauce-core/helpers";
 import { mapEventsToStore, simpleTimeout } from "applesauce-core/observable";
 import {
   catchError,
@@ -14,10 +15,9 @@ import {
   timeout,
 } from "rxjs";
 import { eventLoader, eventStore } from "./store.ts";
-import { normalizeURL } from "applesauce-core/helpers";
 
 /** The canonical NIP-66 relay that publishes kind:10166 monitor announcements. */
-export const MONITOR_RELAYS = ["wss://relay.nostr.watch/"];
+export const MONITOR_RELAYS = relaySet(["wss://relay.nostr.watch/"]);
 
 /** Hard-coded allowlist of trusted NIP-66 monitor pubkeys */
 export const APPROVED_MONITOR_PUBKEYS: ReadonlyArray<string> = [

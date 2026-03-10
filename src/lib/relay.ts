@@ -9,7 +9,7 @@ export const DEFAULT_RELAYS = relaySet([
 ]);
 
 /** Default relay used for the remote signer (NIP-46) QR code on the sign-in page. */
-export const DEFAULT_RELAY_FOR_REMOTE_SIGNER_QR = "wss://relay.nsec.app/";
+export const DEFAULT_REMOTE_SIGNER_RELAY = "wss://relay.nsec.app/";
 
 export const LOOKUP_RELAYS = relaySet([
   "wss://purplepag.es",

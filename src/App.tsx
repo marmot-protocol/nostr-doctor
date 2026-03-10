@@ -12,6 +12,7 @@ import { factory } from "./lib/factory.ts";
 import { eventStore } from "./lib/store.ts";
 import { subjectPubkey$ } from "./lib/subjectPubkey.ts";
 import { REPORT_PAGE_BASE, pagePath } from "./lib/routing.ts";
+import ReportErrorBoundary from "./components/ReportErrorBoundary.tsx";
 import CompleteView from "./pages/complete/index.tsx";
 import CompleteReferralView from "./pages/complete/ReferralView.tsx";
 import ReferralView from "./pages/ref/index.tsx";
@@ -115,7 +116,9 @@ function AppRoutes() {
             element={
               <RequireSubject>
                 <Suspense fallback={<PageFallback />}>
-                  <Component />
+                  <ReportErrorBoundary reportName={name}>
+                    <Component />
+                  </ReportErrorBoundary>
                 </Suspense>
               </RequireSubject>
             }

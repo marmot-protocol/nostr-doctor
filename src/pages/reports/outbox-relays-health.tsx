@@ -4,7 +4,8 @@ import type { RelayMonitor } from "applesauce-common/casts";
 import type { RelayDiscovery } from "applesauce-common/casts";
 import { removeOutboxRelay } from "applesauce-core/operations/mailboxes";
 import { use$ } from "applesauce-react/hooks";
-import { of, timeout } from "rxjs";
+import { combineLatest, of, timeout } from "rxjs";
+import { map } from "rxjs/operators";
 import { useReport } from "../../context/ReportContext.tsx";
 import { eventStore } from "../../lib/store.ts";
 import { factory } from "../../lib/factory.ts";
@@ -44,27 +45,33 @@ function useRelayVerdict(
   monitors: RelayMonitor[],
   relayUrl: string,
 ): RelayVerdict {
-  // Build one observable per monitor for this relay
-  const statuses = monitors.map((m) => {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    return useMonitorRelayStatus(m, relayUrl);
-  });
+  // Compose one observable per monitor into a single combined stream.
+  // This avoids calling hooks inside a variable-length loop (Rules of Hooks).
+  const verdict = use$(
+    () => {
+      if (monitors.length === 0) return of("unknown" as RelayVerdict);
+      const streams = monitors.map((m) => relayStatusWithTimeout(m, relayUrl));
+      return combineLatest(streams).pipe(
+        map((statuses) => {
+          const loaded = statuses.filter((s) => s !== undefined);
+          if (loaded.length === 0) return "unknown" as RelayVerdict;
+          const online = loaded.filter(
+            (s) => s !== null && s?.rttOpen !== undefined,
+          ).length;
+          const total = loaded.length;
+          if (total === 0) return "unknown" as RelayVerdict;
+          if (online > total / 2) return "online" as RelayVerdict;
+          return "offline" as RelayVerdict;
+        }),
+      );
+    },
+    // Re-subscribe whenever the monitor set or relay URL changes.
+    // monitors.length is a proxy for the set identity; monitor UIDs are stable.
+    [monitors.length, relayUrl],
+  );
 
-  return useMemo(() => {
-    // Monitors that have emitted a value (not undefined = still loading)
-    const loaded = statuses.filter((s) => s !== undefined);
-    if (loaded.length === 0) return "unknown";
-
-    // null = monitor has no data for this relay; RelayDiscovery = has data
-    const online = loaded.filter(
-      (s) => s !== null && s?.rttOpen !== undefined,
-    ).length;
-    const total = loaded.length;
-
-    if (total === 0) return "unknown";
-    if (online > total / 2) return "online";
-    return "offline";
-  }, [statuses]);
+  // use$() returns undefined until the first emission; default to "unknown"
+  return verdict ?? "unknown";
 }
 
 // ---------------------------------------------------------------------------

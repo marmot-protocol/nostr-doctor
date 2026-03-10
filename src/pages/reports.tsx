@@ -16,6 +16,10 @@ const REPORTS: ReportPageDefinition[] = [
     Component: lazy(() => import("./reports/outbox-relays-health.tsx")),
   },
   {
+    name: "follow-list-relays",
+    Component: lazy(() => import("./reports/follow-list-relays.tsx")),
+  },
+  {
     name: "metadata-broadcast",
     Component: lazy(() => import("./reports/metadata-broadcast.tsx")),
   },

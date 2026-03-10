@@ -10,7 +10,7 @@ import {
   NostrConnectAccount,
 } from "applesauce-accounts/accounts";
 import { manager } from "../../lib/accounts.ts";
-import { DEFAULT_RELAY_FOR_REMOTE_SIGNER_QR, pool } from "../../lib/relay.ts";
+import { DEFAULT_REMOTE_SIGNER_RELAY, pool } from "../../lib/relay.ts";
 import { getSafeRedirect, REPORT_PAGE_BASE } from "../../lib/routing.ts";
 import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
 
@@ -53,7 +53,7 @@ function SignInMethods() {
     async function init() {
       try {
         signerInstance = new NostrConnectSigner({
-          relays: [DEFAULT_RELAY_FOR_REMOTE_SIGNER_QR],
+          relays: [DEFAULT_REMOTE_SIGNER_RELAY],
         });
         const uri = signerInstance.getNostrConnectURI({ name: "Nostr Doctor" });
         if (cancelled) return;
