@@ -12,8 +12,8 @@ const REPORTS: ReportPageDefinition[] = [
     Component: lazy(() => import("./reports/profile-metadata.tsx")),
   },
   {
-    name: "outbox-relay-health",
-    Component: lazy(() => import("./reports/outbox-relays-health.tsx")),
+    name: "dead-relays",
+    Component: lazy(() => import("./reports/dead-relays.tsx")),
   },
   {
     name: "follow-list-relays",
@@ -22,6 +22,10 @@ const REPORTS: ReportPageDefinition[] = [
   {
     name: "metadata-broadcast",
     Component: lazy(() => import("./reports/metadata-broadcast.tsx")),
+  },
+  {
+    name: "search-relay-nip50",
+    Component: lazy(() => import("./reports/search-relay-nip50.tsx")),
   },
 ];
 

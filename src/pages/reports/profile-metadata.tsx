@@ -26,6 +26,7 @@ const STANDARD_FIELDS = new Set([
   "nip05",
   "lud06",
   "lud16",
+  "languages",
 ]);
 
 function truncate(value: unknown, max = 60): string {
