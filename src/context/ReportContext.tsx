@@ -7,7 +7,6 @@ import {
   createContext,
   use,
   useCallback,
-  useState,
   type ComponentType,
   type LazyExoticComponent,
   type ReactNode,
@@ -17,6 +16,8 @@ import { factory } from "../lib/factory.ts";
 import { DEFAULT_RELAYS, pool } from "../lib/relay.ts";
 import { eventStore } from "../lib/store.ts";
 import { subjectPubkey$ } from "../lib/subjectPubkey.ts";
+import { draftEvents$ } from "../lib/draftEvents.ts";
+import { pagePath } from "../lib/routing.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,77 +29,42 @@ export type PageDefinition = {
   Component: LazyExoticComponent<ComponentType>;
 };
 
-export const REPORT_PAGE_BASE = "/r";
-
-/** Build the full path for a diagnostic page by name */
-// eslint-disable-next-line react-refresh/only-export-components -- shared routing helper, not a component
-export function pagePath(name: string): string {
-  return `${REPORT_PAGE_BASE}/${name}`;
-}
-
-/**
- * Parse redirect from location search. Returns a path only if it's safe:
- * starts with "/" and contains no "//" (avoids protocol-relative or external URLs).
- */
-// eslint-disable-next-line react-refresh/only-export-components -- shared routing helper, not a component
-export function getSafeRedirect(search: string): string | null {
-  const params = new URLSearchParams(search);
-  const raw = params.get("redirect");
-  if (raw != null && raw.startsWith("/") && !raw.includes("//")) return raw;
-  return null;
-}
-
-export type AppContextValue = {
-  /** The user currently being diagnosed — from active account when signed in, else from subjectPubkey$ */
+export type ReportContextValue = {
+  /** The user currently being diagnosed */
   subject: User | null;
 
-  /** Active signer when the user has signed in with a real account; null when not signed in (read-only flow). */
+  /** Active signer when signed in; null in read-only mode */
   signer: ISigner | null;
 
-  /** Navigate to the next page in the PAGES array (or to the first report when not on a report page) */
+  /** Navigate to the next page in the report sequence */
   next: () => void;
 
   /**
-   * Accepts only unsigned EventTemplate objects (no signed events).
-   * - When signer is set: signing and publishing are both handled here.
-   * - When signer is null: the template is collected into draftEvents for the final step.
+   * Accepts only unsigned EventTemplate objects.
+   * - Signer present: signs and publishes immediately.
+   * - Signer null: queues into draftEvents$ for the final step.
    */
   publish: (template: EventTemplate) => Promise<void>;
-
-  /** Unsigned EventTemplate objects collected when signer is null; package in final step */
-  events: EventTemplate[];
-
-  /** Number of events successfully signed and published in this session (signed-in mode only) */
-  publishedCount: number;
-
-  /**
-   * Pre-load a referral: sets the subject pubkey and bulk-seeds draft events.
-   * Called by ReferralView after fetching and decoding a Blossom referral blob.
-   */
-  loadReferral: (pubkey: string, events: EventTemplate[]) => void;
 };
 
 // ---------------------------------------------------------------------------
 // Context
 // ---------------------------------------------------------------------------
 
-const AppContext = createContext<AppContextValue | null>(null);
+const ReportContext = createContext<ReportContextValue | null>(null);
 
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
 
-type AppProviderProps = {
+type ReportProviderProps = {
   pages: ReadonlyArray<PageDefinition>;
   children: ReactNode;
 };
 
-export function AppProvider({ pages, children }: AppProviderProps) {
+export function ReportProvider({ pages, children }: ReportProviderProps) {
   const navigate = useNavigate();
   const location = useLocation();
-
-  const [draftEvents, setDraftEvents] = useState<EventTemplate[]>([]);
-  const [publishedCount, setPublishedCount] = useState(0);
 
   const activeAccount = useActiveAccount();
   const subjectPubkey = use$(subjectPubkey$);
@@ -116,23 +82,21 @@ export function AppProvider({ pages, children }: AppProviderProps) {
       (p) => pagePath(p.name) === location.pathname,
     );
     if (currentIndex === -1) {
-      // Entering first report from pubkey/signin — push so back returns there
       navigate(pagePath(pages[0].name));
       return;
     }
     const replace = { replace: true };
     if (currentIndex >= pages.length - 1) {
-      // Last diagnostic page — go to the terminal complete view
       navigate("/complete", replace);
       return;
     }
     navigate(pagePath(pages[currentIndex + 1].name), replace);
   }, [pages, location.pathname, navigate]);
 
-  const publishEvent = useCallback(
+  const publish = useCallback(
     async (template: EventTemplate) => {
       if (signer === null) {
-        setDraftEvents((prev) => [...prev, template]);
+        draftEvents$.next([...draftEvents$.getValue(), template]);
         return;
       }
 
@@ -143,30 +107,18 @@ export function AppProvider({ pages, children }: AppProviderProps) {
       const relays =
         outboxes && outboxes.length > 0 ? outboxes : DEFAULT_RELAYS;
       await pool.publish(relays, signed);
-      setPublishedCount((n) => n + 1);
     },
     [signer, subjectUser],
   );
 
-  const loadReferral = useCallback(
-    (pubkey: string, referralEvents: EventTemplate[]) => {
-      subjectPubkey$.next(pubkey);
-      setDraftEvents(referralEvents);
-    },
-    [],
-  );
-
-  const value: AppContextValue = {
+  const value: ReportContextValue = {
     subject: subjectUser,
     signer,
     next,
-    publish: publishEvent,
-    events: draftEvents,
-    publishedCount,
-    loadReferral,
+    publish,
   };
 
-  return <AppContext value={value}>{children}</AppContext>;
+  return <ReportContext value={value}>{children}</ReportContext>;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,8 +126,8 @@ export function AppProvider({ pages, children }: AppProviderProps) {
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line react-refresh/only-export-components -- context files intentionally export hook alongside provider
-export function useApp(): AppContextValue {
-  const ctx = use(AppContext);
-  if (!ctx) throw new Error("useApp must be used within AppProvider");
+export function useReport(): ReportContextValue {
+  const ctx = use(ReportContext);
+  if (!ctx) throw new Error("useReport must be used within ReportProvider");
   return ctx;
 }

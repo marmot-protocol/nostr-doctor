@@ -4,8 +4,9 @@ import { firstValueFrom, timeout, catchError, of } from "rxjs";
 import { UserBlossomServersModel } from "applesauce-common/models";
 import type { EventTemplate } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
-import { useApp } from "../../context/AppContext.tsx";
+import { useReport } from "../../context/ReportContext.tsx";
 import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
+import { draftEvents$ } from "../../lib/draftEvents.ts";
 import { eventStore } from "../../lib/store.ts";
 import {
   createReferralLink,
@@ -24,7 +25,7 @@ type LinkState =
   | { status: "error"; message: string };
 
 function useReferralLink(draftEvents: EventTemplate[], subjectPubkey: string) {
-  const { signer } = useApp();
+  const { signer } = useReport();
   const [linkState, setLinkState] = useState<LinkState>({ status: "idle" });
 
   const createLink = useCallback(async () => {
@@ -68,18 +69,23 @@ function useReferralLink(draftEvents: EventTemplate[], subjectPubkey: string) {
 // ReferralView — /complete/referral
 //
 // Requires a signer. If none is present, redirects to sign-in with a return
-// path back here. Orchestrator (index.tsx) already handles routing here only
-// when signer ≠ subject, so we can assume cross-user context.
+// path back here. ReportContext orchestrator routes here only when
+// signer ≠ subject, so we can assume cross-user context.
 // ---------------------------------------------------------------------------
 
 function ReferralView() {
   const navigate = useNavigate();
-  const { signer, events: draftEvents } = useApp();
+  const { signer } = useReport();
+
   // subjectPubkey$ holds the original subject (the person being diagnosed).
-  // After sign-in, AppContext.subject switches to the signer's identity,
+  // After sign-in, ReportContext.subject switches to the signer's identity,
   // so we must read subjectPubkey$ directly here.
   const rawSubjectPubkey = use$(subjectPubkey$);
   const subjectPubkey = rawSubjectPubkey ?? "";
+
+  // Read draftEvents from the BehaviorSubject directly
+  const draftEvents = use$(draftEvents$);
+
   const { linkState, createLink, reset } = useReferralLink(
     draftEvents,
     subjectPubkey,

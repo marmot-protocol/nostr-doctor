@@ -8,7 +8,7 @@ import {
 import { isNip05, queryProfile } from "nostr-tools/nip05";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { useApp, getSafeRedirect } from "../../context/AppContext.tsx";
+import { getSafeRedirect, REPORT_PAGE_BASE } from "../../lib/routing.ts";
 import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
 import { primal } from "../../lib/primal.ts";
 
@@ -73,7 +73,6 @@ function ResultItem({
 function StepPubkey() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { next } = useApp();
   const redirectTo = getSafeRedirect(location.search);
 
   const [value, setValue] = useState("");
@@ -88,8 +87,7 @@ function StepPubkey() {
   function handleContinue() {
     if (!resolvedPubkey) return;
     subjectPubkey$.next(resolvedPubkey);
-    if (redirectTo) navigate(redirectTo);
-    else next();
+    navigate(redirectTo ?? REPORT_PAGE_BASE);
   }
 
   // Kick off async resolution whenever value changes.

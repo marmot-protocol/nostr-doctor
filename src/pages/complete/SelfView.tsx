@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { EventTemplate } from "applesauce-core/helpers";
-import { useApp } from "../../context/AppContext.tsx";
+import { useReport } from "../../context/ReportContext.tsx";
+import { draftEvents$ } from "../../lib/draftEvents.ts";
 import { CompleteHeader, SuccessBadge } from "./_shared.tsx";
 
 // ---------------------------------------------------------------------------
@@ -10,18 +11,20 @@ import { CompleteHeader, SuccessBadge } from "./_shared.tsx";
 type PublishState =
   | { status: "idle" }
   | { status: "publishing" }
-  | { status: "done"; count: number }
+  | { status: "done" }
   | { status: "error"; message: string };
 
 function PublishDraftsCard({ draftEvents }: { draftEvents: EventTemplate[] }) {
-  const { publish } = useApp();
+  const { publish } = useReport();
   const [state, setState] = useState<PublishState>({ status: "idle" });
 
   async function handlePublish() {
     setState({ status: "publishing" });
     try {
       await Promise.all(draftEvents.map((t) => publish(t)));
-      setState({ status: "done", count: draftEvents.length });
+      // Clear drafts now that they're published
+      draftEvents$.next([]);
+      setState({ status: "done" });
     } catch (e) {
       setState({
         status: "error",
@@ -34,8 +37,7 @@ function PublishDraftsCard({ draftEvents }: { draftEvents: EventTemplate[] }) {
     return (
       <div className="bg-success/10 border border-success/30 rounded-xl p-4 text-center">
         <p className="text-sm text-base-content/70">
-          <span className="font-semibold text-base-content">{state.count}</span>{" "}
-          {state.count === 1 ? "fix" : "fixes"} published to your outbox relays.
+          All fixes published to your outbox relays.
         </p>
       </div>
     );
@@ -79,11 +81,9 @@ function PublishDraftsCard({ draftEvents }: { draftEvents: EventTemplate[] }) {
 // ---------------------------------------------------------------------------
 
 function SelfView({
-  publishedCount,
   draftEvents,
   onStartOver,
 }: {
-  publishedCount: number;
   draftEvents: EventTemplate[];
   onStartOver: () => void;
 }) {
@@ -91,9 +91,7 @@ function SelfView({
 
   const subtitle = hasDrafts
     ? `Your diagnostic is complete. ${draftEvents.length} ${draftEvents.length === 1 ? "fix is" : "fixes are"} ready to publish.`
-    : publishedCount > 0
-      ? "Your diagnostic is complete and changes have been published."
-      : "Your diagnostic is complete.";
+    : "Your diagnostic is complete.";
 
   return (
     <>
@@ -101,19 +99,9 @@ function SelfView({
 
       {!hasDrafts && (
         <SuccessBadge>
-          {publishedCount > 0 ? (
-            <p className="text-sm text-base-content/70">
-              <span className="font-semibold text-base-content">
-                {publishedCount}
-              </span>{" "}
-              {publishedCount === 1 ? "event" : "events"} published to your
-              outbox relays
-            </p>
-          ) : (
-            <p className="text-sm text-base-content/70">
-              No changes were needed — your profile looks healthy.
-            </p>
-          )}
+          <p className="text-sm text-base-content/70">
+            No changes were needed — your profile looks healthy.
+          </p>
         </SuccessBadge>
       )}
 

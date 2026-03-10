@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { of, timeout } from "rxjs";
 import { setContent } from "applesauce-core/operations";
 import { use$ } from "applesauce-react/hooks";
-import { useApp } from "../../context/AppContext.tsx";
+import { useReport } from "../../context/ReportContext.tsx";
 import { eventStore } from "../../lib/store.ts";
 import { factory } from "../../lib/factory.ts";
 
@@ -73,7 +73,7 @@ function FieldRow({
 // ---------------------------------------------------------------------------
 
 function ProfileMetadataReport() {
-  const { subject: subjectUser, next, publish: publishEvent } = useApp();
+  const { subject: subjectUser, next, publish: publishEvent } = useReport();
 
   // Subscribe to the user's kind 0 profile (triggers auto-load via eventLoader).
   // Pipes a timeout so the stream resolves to null (not found) rather than

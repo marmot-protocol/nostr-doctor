@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { useApp, getSafeRedirect } from "../../context/AppContext.tsx";
+import { getSafeRedirect, REPORT_PAGE_BASE } from "../../lib/routing.ts";
 import {
   NostrConnectSigner,
   PasswordSigner,
@@ -275,18 +275,16 @@ function BunkerMethod({ onSignedIn }: { onSignedIn: SignedInHandler }) {
 }
 
 // ---------------------------------------------------------------------------
-// Route page wrappers — each sign-in method has its own route
+// Route page wrappers — each sign-in method has its own route.
+// After sign-in, navigate to ?redirect= or /r (the report flow entry point).
+// Sign-in pages have no knowledge of the report flow internals.
 // ---------------------------------------------------------------------------
 
 function useSignInHandler() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { next } = useApp();
   const redirectTo = getSafeRedirect(location.search);
-  return () => {
-    if (redirectTo) navigate(redirectTo);
-    else next();
-  };
+  return () => navigate(redirectTo ?? REPORT_PAGE_BASE);
 }
 
 export function SignInPrivateKeyPage() {

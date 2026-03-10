@@ -5,7 +5,7 @@ import type { RelayDiscovery } from "applesauce-common/casts";
 import { removeOutboxRelay } from "applesauce-core/operations/mailboxes";
 import { use$ } from "applesauce-react/hooks";
 import { of, timeout } from "rxjs";
-import { useApp } from "../../context/AppContext.tsx";
+import { useReport } from "../../context/ReportContext.tsx";
 import { eventStore } from "../../lib/store.ts";
 import { factory } from "../../lib/factory.ts";
 import { pool } from "../../lib/relay.ts";
@@ -222,7 +222,7 @@ function RelayRow({
 // ---------------------------------------------------------------------------
 
 function OutboxRelayHealth() {
-  const { subject: subjectUser, next, publish: publishEvent } = useApp();
+  const { subject: subjectUser, next, publish: publishEvent } = useReport();
 
   // Load monitors
   const monitors = use$(monitors$) ?? [];

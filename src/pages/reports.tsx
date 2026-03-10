@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import type { PageDefinition as ReportPageDefinition } from "../context/AppContext.tsx";
+import type { PageDefinition as ReportPageDefinition } from "../context/ReportContext.tsx";
 
 // ---------------------------------------------------------------------------
 // Page registry — add new diagnostic pages here in order.
@@ -14,6 +14,10 @@ const REPORTS: ReportPageDefinition[] = [
   {
     name: "outbox-relay-health",
     Component: lazy(() => import("./reports/outbox-relays-health.tsx")),
+  },
+  {
+    name: "metadata-broadcast",
+    Component: lazy(() => import("./reports/metadata-broadcast.tsx")),
   },
 ];
 

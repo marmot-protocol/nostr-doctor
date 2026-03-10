@@ -10,11 +10,8 @@ import {
   NostrConnectAccount,
 } from "applesauce-accounts/accounts";
 import { manager } from "../../lib/accounts.ts";
-import {
-  DEFAULT_RELAY_FOR_REMOTE_SIGNER_QR,
-  pool,
-} from "../../lib/relay.ts";
-import { useApp, getSafeRedirect } from "../../context/AppContext.tsx";
+import { DEFAULT_RELAY_FOR_REMOTE_SIGNER_QR, pool } from "../../lib/relay.ts";
+import { getSafeRedirect, REPORT_PAGE_BASE } from "../../lib/routing.ts";
 
 // Wire NostrConnectSigner to use our shared RelayPool once at module load
 NostrConnectSigner.subscriptionMethod = pool.subscription.bind(pool);
@@ -33,12 +30,10 @@ function SignInMethods() {
   const navigate = useNavigate();
   const location = useLocation();
   const qs = location.search ?? "";
-  const { next } = useApp();
   const redirectTo = getSafeRedirect(location.search);
 
   function handleSignedIn() {
-    if (redirectTo) navigate(redirectTo);
-    else next();
+    navigate(redirectTo ?? REPORT_PAGE_BASE);
   }
 
   // --- QR / Nostr Connect ---
