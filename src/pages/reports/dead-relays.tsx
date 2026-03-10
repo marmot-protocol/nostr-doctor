@@ -1,12 +1,12 @@
-import type {
-  BlockedRelays,
-  FavoriteRelays,
-  RelayDiscovery,
-  RelayMonitor,
-  SearchRelays,
-} from "applesauce-common/casts";
-import { defined } from "applesauce-core";
-import type { EventTemplate } from "applesauce-core/helpers";
+import type { RelayDiscovery, RelayMonitor } from "applesauce-common/casts";
+import { getRelaysFromList } from "applesauce-common/helpers/lists";
+import {
+  relaySet,
+  type EventTemplate,
+  type NostrEvent,
+} from "applesauce-core/helpers";
+import { getInboxes, getOutboxes } from "applesauce-core/helpers/mailboxes";
+import { mapEventsToStore } from "applesauce-core/observable/map-events-to-store";
 import {
   removeInboxRelay,
   removeOutboxRelay,
@@ -16,22 +16,22 @@ import { modifyPublicTags } from "applesauce-core/operations/tags";
 import { use$ } from "applesauce-react/hooks";
 import type { Relay } from "applesauce-relay";
 import { useEffect, useMemo, useState } from "react";
-import { combineLatest, of, timeout } from "rxjs";
-import { map } from "rxjs/operators";
+import { combineLatest, of, timer } from "rxjs";
+import { last, map, takeUntil } from "rxjs/operators";
 import { useReport } from "../../context/ReportContext.tsx";
 import { factory } from "../../lib/factory.ts";
 import { monitors$, relayStatusWithTimeout } from "../../lib/relay-monitors.ts";
-import { pool } from "../../lib/relay.ts";
+import { DEFAULT_RELAYS, LOOKUP_RELAYS, pool } from "../../lib/relay.ts";
 import { eventStore } from "../../lib/store.ts";
+import { mapEventsToTimeline } from "applesauce-core";
+import {
+  AUTO_ADVANCE_MS,
+  EVENT_LOAD_TIMEOUT_MS,
+  VERDICT_TIMEOUT_MS,
+} from "../../lib/timeouts.ts";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/** ms to wait for each relay list observable before treating it as not found */
-const LIST_LOAD_TIMEOUT_MS = 10_000;
-/** ms to wait for all relay verdicts before treating unknowns as skippable */
-const VERDICT_TIMEOUT_MS = 15_000;
+/** Relays used to fetch subject's relay lists (before we know their outboxes) */
+const RELAY_LIST_REQUEST_RELAYS = relaySet(LOOKUP_RELAYS, DEFAULT_RELAYS);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,6 +56,55 @@ type RelayListStep = {
   eventKind: number;
   urls: string[];
 };
+
+/** Result of a single pool.request for all relay list kinds; null on timeout/error */
+type RelayListsResult = {
+  outboxes: string[] | null;
+  inboxes: string[] | null;
+  favoriteRelays: { relays: string[] } | null;
+  searchRelays: { relays: string[] } | null;
+  dmRelays: string[] | null;
+  blockedRelays: { relays: string[] } | null;
+} | null;
+
+/** Relay list kinds fetched in one request */
+const RELAY_LIST_KINDS = [10002, 10006, 10007, 10012, 10050] as const;
+
+function latestReplaceableByKind(
+  events: NostrEvent[],
+): Map<number, NostrEvent> {
+  const byKind = new Map<number, NostrEvent>();
+  for (const e of events) {
+    const cur = byKind.get(e.kind);
+    if (!cur || e.created_at > cur.created_at) byKind.set(e.kind, e);
+  }
+  return byKind;
+}
+
+function parseRelayLists(events: NostrEvent[]): RelayListsResult {
+  const latest = latestReplaceableByKind(events);
+  const kind10002 = latest.get(10002);
+  return {
+    outboxes: kind10002 ? getOutboxes(kind10002) : null,
+    inboxes: kind10002 ? getInboxes(kind10002) : null,
+    favoriteRelays: (() => {
+      const e = latest.get(10012);
+      return e ? { relays: getRelaysFromList(e) } : null;
+    })(),
+    searchRelays: (() => {
+      const e = latest.get(10007);
+      return e ? { relays: getRelaysFromList(e) } : null;
+    })(),
+    dmRelays: (() => {
+      const e = latest.get(10050);
+      return e ? getRelaysFromList(e) : null;
+    })(),
+    blockedRelays: (() => {
+      const e = latest.get(10006);
+      return e ? { relays: getRelaysFromList(e) } : null;
+    })(),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Per-relay verdict hook (combines all monitors into a majority vote)
@@ -356,7 +405,7 @@ function StepView({
   // Auto-advance when everything confirmed healthy
   useEffect(() => {
     if (allHealthy) {
-      const timer = setTimeout(() => onStepDone(), 1500);
+      const timer = setTimeout(() => onStepDone(), AUTO_ADVANCE_MS);
       return () => clearTimeout(timer);
     }
   }, [allHealthy, onStepDone]);
@@ -364,7 +413,7 @@ function StepView({
   // All relays removed — auto-advance
   useEffect(() => {
     if (removed.size > 0 && relayList.length === 0) {
-      const timer = setTimeout(() => onStepDone(), 1500);
+      const timer = setTimeout(() => onStepDone(), AUTO_ADVANCE_MS);
       return () => clearTimeout(timer);
     }
   }, [removed.size, relayList.length, onStepDone]);
@@ -572,80 +621,28 @@ function DeadRelays() {
   // Load all relay lists upfront; each resolves to null on timeout/missing
   // -------------------------------------------------------------------------
 
-  const outboxes = use$(
+  const outboxes = use$(() => subjectUser?.outboxes$, [subjectUser]);
+  const relayLists = use$(
     () =>
       subjectUser
-        ? subjectUser.outboxes$.pipe(
-            defined(),
-            timeout({ first: LIST_LOAD_TIMEOUT_MS, with: () => of(null) }),
-          )
+        ? pool
+            .request(relaySet(outboxes, RELAY_LIST_REQUEST_RELAYS), {
+              authors: [subjectUser.pubkey],
+              kinds: [...RELAY_LIST_KINDS],
+            })
+            .pipe(
+              mapEventsToStore(eventStore),
+              mapEventsToTimeline(),
+              takeUntil(timer(EVENT_LOAD_TIMEOUT_MS)),
+              // Emit only the final timeline once the stream is complete (done loading)
+              last(),
+              map((events) => parseRelayLists(events)),
+            )
         : undefined,
-    [subjectUser?.pubkey],
+    [subjectUser?.pubkey, outboxes?.join(", ")],
   );
 
-  const inboxes = use$(
-    () =>
-      subjectUser
-        ? subjectUser.inboxes$.pipe(
-            defined(),
-            timeout({ first: LIST_LOAD_TIMEOUT_MS, with: () => of(null) }),
-          )
-        : undefined,
-    [subjectUser?.pubkey],
-  );
-
-  const favoriteRelays = use$(
-    () =>
-      subjectUser
-        ? subjectUser.favoriteRelays$.pipe(
-            defined(),
-            timeout({ first: LIST_LOAD_TIMEOUT_MS, with: () => of(null) }),
-          )
-        : undefined,
-    [subjectUser?.pubkey],
-  ) as FavoriteRelays | null | undefined;
-
-  const searchRelays = use$(
-    () =>
-      subjectUser
-        ? subjectUser.searchRelays$.pipe(
-            defined(),
-            timeout({ first: LIST_LOAD_TIMEOUT_MS, with: () => of(null) }),
-          )
-        : undefined,
-    [subjectUser?.pubkey],
-  ) as SearchRelays | null | undefined;
-
-  const dmRelays = use$(
-    () =>
-      subjectUser
-        ? subjectUser.directMessageRelays$.pipe(
-            defined(),
-            timeout({ first: LIST_LOAD_TIMEOUT_MS, with: () => of(null) }),
-          )
-        : undefined,
-    [subjectUser?.pubkey],
-  );
-
-  const blockedRelays = use$(
-    () =>
-      subjectUser
-        ? subjectUser.blockedRelays$.pipe(
-            defined(),
-            timeout({ first: LIST_LOAD_TIMEOUT_MS, with: () => of(null) }),
-          )
-        : undefined,
-    [subjectUser?.pubkey],
-  ) as BlockedRelays | null | undefined;
-
-  // All 6 lists are loaded when none are still undefined
-  const allLoaded =
-    outboxes !== undefined &&
-    inboxes !== undefined &&
-    favoriteRelays !== undefined &&
-    searchRelays !== undefined &&
-    dmRelays !== undefined &&
-    blockedRelays !== undefined;
+  const allLoaded = relayLists !== undefined;
 
   // -------------------------------------------------------------------------
   // Build the active steps list — only lists that have ≥1 relay URL
@@ -653,7 +650,7 @@ function DeadRelays() {
   // -------------------------------------------------------------------------
 
   const activeSteps = useMemo<RelayListStep[]>(() => {
-    if (!allLoaded) return [];
+    if (!allLoaded || relayLists === undefined) return [];
     const steps: RelayListStep[] = [];
 
     const push = (
@@ -667,26 +664,35 @@ function DeadRelays() {
       }
     };
 
-    push("nip65-outboxes", "Outbox Relays", 10002, outboxes);
-    push("nip65-inboxes", "Inbox Relays", 10002, inboxes);
+    push(
+      "nip65-outboxes",
+      "Outbox Relays",
+      10002,
+      relayLists?.outboxes ?? null,
+    );
+    push("nip65-inboxes", "Inbox Relays", 10002, relayLists?.inboxes ?? null);
     push(
       "favorite-relays",
       "Favorite Relays",
       10012,
-      favoriteRelays?.relays ?? null,
+      relayLists?.favoriteRelays?.relays ?? null,
     );
-    push("search-relays", "Search Relays", 10007, searchRelays?.relays ?? null);
-    push("dm-relays", "DM Relays", 10050, dmRelays);
+    push(
+      "search-relays",
+      "Search Relays",
+      10007,
+      relayLists?.searchRelays?.relays ?? null,
+    );
+    push("dm-relays", "DM Relays", 10050, relayLists?.dmRelays ?? null);
     push(
       "blocked-relays",
       "Blocked Relays",
       10006,
-      blockedRelays?.relays ?? null,
+      relayLists?.blockedRelays?.relays ?? null,
     );
 
     return steps;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allLoaded]);
+  }, [allLoaded, relayLists]);
 
   // -------------------------------------------------------------------------
   // Step state

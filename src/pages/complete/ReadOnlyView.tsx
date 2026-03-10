@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router";
-import type { EventTemplate } from "applesauce-core/helpers";
+import type { NostrEvent } from "applesauce-core/helpers";
 import { CompleteHeader, SuccessBadge } from "./_shared.tsx";
 
 // ---------------------------------------------------------------------------
@@ -15,7 +15,7 @@ function ReadOnlyView({
   draftEvents,
   onStartOver,
 }: {
-  draftEvents: EventTemplate[];
+  draftEvents: NostrEvent[];
   onStartOver: () => void;
 }) {
   const navigate = useNavigate();

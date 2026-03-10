@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { EventTemplate } from "applesauce-core/helpers";
+import type { NostrEvent } from "applesauce-core/helpers";
 import { useReport } from "../../context/ReportContext.tsx";
 import { draftEvents$ } from "../../lib/draftEvents.ts";
 import { CompleteHeader, SuccessBadge } from "./_shared.tsx";
@@ -14,7 +14,7 @@ type PublishState =
   | { status: "done" }
   | { status: "error"; message: string };
 
-function PublishDraftsCard({ draftEvents }: { draftEvents: EventTemplate[] }) {
+function PublishDraftsCard({ draftEvents }: { draftEvents: NostrEvent[] }) {
   const { publish } = useReport();
   const [state, setState] = useState<PublishState>({ status: "idle" });
 
@@ -23,7 +23,7 @@ function PublishDraftsCard({ draftEvents }: { draftEvents: EventTemplate[] }) {
     try {
       await Promise.all(draftEvents.map((t) => publish(t)));
       // Clear drafts now that they're published
-      draftEvents$.next([]);
+      draftEvents$.next({});
       setState({ status: "done" });
     } catch (e) {
       setState({
@@ -84,7 +84,7 @@ function SelfView({
   draftEvents,
   onStartOver,
 }: {
-  draftEvents: EventTemplate[];
+  draftEvents: NostrEvent[];
   onStartOver: () => void;
 }) {
   const hasDrafts = draftEvents.length > 0;

@@ -5,9 +5,7 @@ import { use$ } from "applesauce-react/hooks";
 import { useReport } from "../../context/ReportContext.tsx";
 import { eventStore } from "../../lib/store.ts";
 import { factory } from "../../lib/factory.ts";
-
-/** ms to wait for kind:0 before treating the profile as not found */
-const PROFILE_LOAD_TIMEOUT_MS = 10_000;
+import { AUTO_ADVANCE_MS, EVENT_LOAD_TIMEOUT_MS } from "../../lib/timeouts.ts";
 
 // ---------------------------------------------------------------------------
 // Standard kind 0 fields per NIP-01, NIP-24, NIP-05, NIP-57
@@ -83,7 +81,7 @@ function ProfileMetadataReport() {
     () =>
       subjectUser
         ? subjectUser.profile$.pipe(
-            timeout({ first: PROFILE_LOAD_TIMEOUT_MS, with: () => of(null) }),
+            timeout({ first: EVENT_LOAD_TIMEOUT_MS, with: () => of(null) }),
           )
         : undefined,
     [subjectUser?.pubkey],
@@ -118,7 +116,7 @@ function ProfileMetadataReport() {
   // Auto-advance after successful publish
   useEffect(() => {
     if (done) {
-      const timer = setTimeout(() => next(), 1500);
+      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
       return () => clearTimeout(timer);
     }
   }, [done, next]);
@@ -132,7 +130,7 @@ function ProfileMetadataReport() {
   // Auto-advance if profile is clean (no non-standard fields)
   useEffect(() => {
     if (profileClean) {
-      const timer = setTimeout(() => next(), 1500);
+      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
       return () => clearTimeout(timer);
     }
   }, [profileClean, next]);

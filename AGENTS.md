@@ -67,7 +67,8 @@ src/
 │   ├── factory.ts        # EventFactory wired to manager.signer (ProxySigner)
 │   ├── relay.ts          # RelayPool + DEFAULT_RELAYS + LOOKUP_RELAYS
 │   ├── relay-monitors.ts # monitors$ observable + APPROVED_MONITOR_PUBKEYS
-│   └── store.ts          # EventStore + eventLoader
+│   ├── store.ts          # EventStore + eventLoader
+│   └── timeouts.ts       # Shared timeout constants for all report pages
 └── pages/
     ├── reports.tsx       # REPORTS registry — add new diagnostic pages here
     ├── reports/          # One file per diagnostic report page
@@ -213,6 +214,7 @@ import { use$ } from "applesauce-react/hooks";
 - `manager` (`lib/accounts.ts`) — session-only account management; no `localStorage`
 - `factory` (`lib/factory.ts`) — event creation and signing via `manager.signer` (ProxySigner)
 - `monitors$` (`lib/relay-monitors.ts`) — RxJS observable of live NIP-66 relay monitors
+- `lib/timeouts.ts` — **canonical source for all timeout and auto-advance durations**; import from here instead of declaring local constants in report pages
 - Relay/network errors from `applesauce-relay` are RxJS Observable errors — handle with `catchError`
 - Subscribe to observables in components via `use$` from `applesauce-react/hooks`
 - Always provide a `shareReplay(1)` when an observable is shared across multiple subscribers

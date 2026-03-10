@@ -1,6 +1,13 @@
 import type { IAccount } from "applesauce-accounts";
 import { castUser, type User } from "applesauce-common/casts";
-import { relaySet, type EventTemplate } from "applesauce-core/helpers";
+import {
+  fakeVerifyEvent,
+  getEventHash,
+  getEventUID,
+  relaySet,
+  type EventTemplate,
+  type NostrEvent,
+} from "applesauce-core/helpers";
 import { use$, useActiveAccount } from "applesauce-react/hooks";
 import {
   createContext,
@@ -17,6 +24,32 @@ import { DEFAULT_RELAYS, pool } from "../lib/relay.ts";
 import { pagePath } from "../lib/routing.ts";
 import { eventStore } from "../lib/store.ts";
 import { subjectPubkey$ } from "../lib/subjectPubkey.ts";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a fake-signed NostrEvent from an EventTemplate so it can be added to
+ * the EventStore without a real signer. The event will never be published with
+ * this fake signature — it is only used locally so later report pages see the
+ * latest version of each kind.
+ */
+function fakeStampEvent(template: EventTemplate, pubkey: string): NostrEvent {
+  const stamped = {
+    kind: template.kind,
+    content: template.content,
+    tags: template.tags,
+    created_at: template.created_at ?? Math.floor(Date.now() / 1000),
+    pubkey,
+    sig: "",
+    id: "",
+  };
+  stamped.id = getEventHash(stamped);
+  const event = stamped as NostrEvent;
+  fakeVerifyEvent(event);
+  return event;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -94,15 +127,33 @@ export function ReportProvider({ pages, children }: ReportProviderProps) {
   const publish = useCallback(
     async (template: EventTemplate) => {
       if (account === null) {
-        draftEvents$.next([...draftEvents$.getValue(), template]);
+        // No signer — fake-stamp the event so the store accepts it, then store
+        // the canonical version returned by eventStore.add() in draftEvents$.
+        // Using the store's return value keyed by getEventUID means replaceable
+        // events are automatically deduplicated: a later fix for kind:10002
+        // replaces the earlier one rather than appending a second entry.
+        if (!subjectPubkey) return;
+        const fakeEvent = fakeStampEvent(template, subjectPubkey);
+        const canonical = eventStore.add(fakeEvent) ?? fakeEvent;
+        draftEvents$.next({
+          ...draftEvents$.getValue(),
+          [getEventUID(canonical)]: canonical,
+        });
         return;
       }
 
       const signed = await factory.sign(template);
+      // Hydrate the store immediately so subsequent reports read the new event
+      // rather than the stale version that was fetched from relays.
+      const canonical = eventStore.add(signed) ?? signed;
+      draftEvents$.next({
+        ...draftEvents$.getValue(),
+        [getEventUID(canonical)]: canonical,
+      });
       await pool.publish(relaySet(outboxes, DEFAULT_RELAYS), signed);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [account, outboxes?.join(",")],
+    [account, subjectPubkey, outboxes?.join(",")],
   );
 
   const value: ReportContextValue = {

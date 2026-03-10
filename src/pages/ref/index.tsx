@@ -9,7 +9,6 @@ import {
   referralPack$,
   type DecodedReferralPack,
 } from "../../lib/referralPack.ts";
-import { draftEvents$ } from "../../lib/draftEvents.ts";
 import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
 import { manager } from "../../lib/accounts.ts";
 import { pool, DEFAULT_RELAYS, LOOKUP_RELAYS } from "../../lib/relay.ts";
@@ -214,7 +213,6 @@ function ReferralPage() {
           events,
         };
         referralPack$.next(decoded);
-        draftEvents$.next(events);
         subjectPubkey$.next(subjectPubkey);
 
         setPhase({ name: "summary" });
@@ -259,7 +257,6 @@ function ReferralPage() {
       }
 
       // Clear shared state
-      draftEvents$.next([]);
       referralPack$.next(null);
       subjectPubkey$.next(null);
 

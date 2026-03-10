@@ -5,9 +5,7 @@ import { use$ } from "applesauce-react/hooks";
 import { useReport } from "../../context/ReportContext.tsx";
 import { eventStore } from "../../lib/store.ts";
 import { factory } from "../../lib/factory.ts";
-
-/** ms to wait for kind:3 before treating the follow list as not found */
-const CONTACTS_LOAD_TIMEOUT_MS = 10_000;
+import { AUTO_ADVANCE_MS, EVENT_LOAD_TIMEOUT_MS } from "../../lib/timeouts.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,7 +64,7 @@ function FollowListRelaysReport() {
     () =>
       subjectUser
         ? subjectUser.contacts$.pipe(
-            timeout({ first: CONTACTS_LOAD_TIMEOUT_MS, with: () => of(null) }),
+            timeout({ first: EVENT_LOAD_TIMEOUT_MS, with: () => of(null) }),
           )
         : undefined,
     [subjectUser?.pubkey],
@@ -96,7 +94,7 @@ function FollowListRelaysReport() {
   // Auto-advance when already clean (no embedded relays)
   useEffect(() => {
     if (isClean) {
-      const timer = setTimeout(() => next(), 1500);
+      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
       return () => clearTimeout(timer);
     }
   }, [isClean, next]);
@@ -104,7 +102,7 @@ function FollowListRelaysReport() {
   // Auto-advance after successful publish
   useEffect(() => {
     if (done) {
-      const timer = setTimeout(() => next(), 1500);
+      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
       return () => clearTimeout(timer);
     }
   }, [done, next]);

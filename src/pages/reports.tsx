@@ -16,6 +16,10 @@ const REPORTS: ReportPageDefinition[] = [
     Component: lazy(() => import("./reports/dead-relays.tsx")),
   },
   {
+    name: "dm-relay-auth",
+    Component: lazy(() => import("./reports/dm-relay-auth.tsx")),
+  },
+  {
     name: "follow-list-relays",
     Component: lazy(() => import("./reports/follow-list-relays.tsx")),
   },

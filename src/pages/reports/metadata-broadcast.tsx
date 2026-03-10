@@ -4,13 +4,12 @@ import { use$ } from "applesauce-react/hooks";
 import { EMPTY, timeout } from "rxjs";
 import { useReport } from "../../context/ReportContext.tsx";
 import { pool, LOOKUP_RELAYS } from "../../lib/relay.ts";
-
-/** ms to wait for the kind:10002 outbox list before proceeding with LOOKUP_RELAYS only */
-const OUTBOX_LOAD_TIMEOUT_MS = 8_000;
-/** ms to wait per relay request before treating it as complete */
-const RELAY_REQUEST_TIMEOUT_MS = 8_000;
-/** ms after which we stop waiting for publish and go to next report */
-const BROADCAST_TIMEOUT_MS = 25_000;
+import {
+  AUTO_ADVANCE_MS,
+  BROADCAST_TIMEOUT_MS,
+  OUTBOX_LOAD_TIMEOUT_MS,
+  RELAY_REQUEST_TIMEOUT_MS,
+} from "../../lib/timeouts.ts";
 
 // ---------------------------------------------------------------------------
 // Metadata kinds we check for
@@ -302,7 +301,10 @@ function MetadataBroadcast() {
           },
         });
 
-      subscriptions.push({ url: relayUrl, unsubscribe: sub.unsubscribe.bind(sub) });
+      subscriptions.push({
+        url: relayUrl,
+        unsubscribe: sub.unsubscribe.bind(sub),
+      });
     }
 
     return () => {
@@ -399,7 +401,7 @@ function MetadataBroadcast() {
   // Auto-advance after done
   useEffect(() => {
     if (done) {
-      const timer = setTimeout(() => next(), 1500);
+      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
       return () => clearTimeout(timer);
     }
   }, [done, next]);
@@ -407,7 +409,7 @@ function MetadataBroadcast() {
   // Auto-advance when all-clear (everything present on every relay)
   useEffect(() => {
     if (allKindsPresentEverywhere) {
-      const timer = setTimeout(() => next(), 1500);
+      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
       return () => clearTimeout(timer);
     }
   }, [allKindsPresentEverywhere, next]);

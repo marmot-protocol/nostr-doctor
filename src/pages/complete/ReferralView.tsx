@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { useNavigate, Navigate } from "react-router";
 import { firstValueFrom, timeout, catchError, of } from "rxjs";
 import { UserBlossomServersModel } from "applesauce-common/models";
-import type { EventTemplate } from "applesauce-core/helpers";
+import type { NostrEvent } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
 import { useReport } from "../../context/ReportContext.tsx";
 import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
@@ -24,7 +24,7 @@ type LinkState =
   | { status: "success"; url: string }
   | { status: "error"; message: string };
 
-function useReferralLink(draftEvents: EventTemplate[], subjectPubkey: string) {
+function useReferralLink(draftEvents: NostrEvent[], subjectPubkey: string) {
   const { account } = useReport();
   const [linkState, setLinkState] = useState<LinkState>({ status: "idle" });
 
@@ -84,7 +84,8 @@ function ReferralView() {
   const subjectPubkey = rawSubjectPubkey ?? "";
 
   // Read draftEvents from the BehaviorSubject directly
-  const draftEvents = use$(draftEvents$);
+  const draftEventsRecord = use$(draftEvents$);
+  const draftEvents = Object.values(draftEventsRecord);
 
   const { linkState, createLink, reset } = useReferralLink(
     draftEvents,

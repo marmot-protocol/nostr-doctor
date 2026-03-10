@@ -36,7 +36,7 @@ function CompleteView() {
     queueMicrotask(() => {
       manager.clearActive();
       subjectPubkey$.next(null);
-      draftEvents$.next([]);
+      draftEvents$.next({});
     });
   }
 
@@ -45,6 +45,8 @@ function CompleteView() {
     !isReadOnly &&
     signerPubkey !== null &&
     signerPubkey !== originalSubjectPubkey;
+
+  const draftArray = Object.values(draftEvents);
 
   // Signed in as someone else — hand off to the dedicated referral flow
   if (isCrossUser) {
@@ -57,11 +59,11 @@ function CompleteView() {
         <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
           {isReadOnly ? (
             <ReadOnlyView
-              draftEvents={draftEvents}
+              draftEvents={draftArray}
               onStartOver={handleStartOver}
             />
           ) : (
-            <SelfView draftEvents={draftEvents} onStartOver={handleStartOver} />
+            <SelfView draftEvents={draftArray} onStartOver={handleStartOver} />
           )}
         </div>
       </div>
