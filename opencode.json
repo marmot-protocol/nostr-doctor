@@ -1,0 +1,86 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "nostr": {
+      "type": "local",
+      "command": ["pnpx", "@nostrbook/mcp@latest"]
+    },
+    "applesauce": {
+      "type": "remote",
+      "url": "https://mcp.applesauce.build/mcp"
+    }
+  },
+  "provider": {
+    "ppq": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ppq",
+      "options": {
+        "baseURL": "https://api.ppq.ai",
+        "apiKey": "sk-D6hnctMysaN_rhW7zYMktQ",
+        "includeUsage": true
+      },
+      "models": {
+        "z-ai/glm-4.6": {
+          "name": "z-ai/glm-4.6"
+        },
+        "x-ai/grok-code-fast-1": {
+          "name": "x-ai/grok-code-fast-1"
+        },
+        "moonshotai/kimi-k2": {
+          "name": "moonshotai/kimi-k2"
+        },
+        "qwen/qwen3-coder": {
+          "name": "qwen/qwen3-coder"
+        },
+        "claude-sonnet-4.6": {
+          "name": "claude-sonnet-4.6"
+        },
+        "claude-haiku-4.5": {
+          "name": "claude-haiku-4.5"
+        },
+        "claude-opus-4.6": {
+          "name": "claude-opus-4.6"
+        },
+        "gemini-2.5-pro": {
+          "name": "gemini-2.5-pro"
+        },
+        "gpt-5.1": {
+          "name": "gpt-5.1"
+        },
+        "gpt-5.1-codex": {
+          "name": "gpt-5.1-codex"
+        },
+        "openai/gpt-5.3-codex": {
+          "name": "openai/gpt-5.3-codex"
+        },
+        "openai/gpt-5.1-codex-max": {
+          "name": "openai/gpt-5.1-codex-max"
+        },
+        "openai/gpt-5": {
+          "name": "openai/gpt-5"
+        },
+        "openai/gpt-5-codex": {
+          "name": "openai/gpt-5-codex"
+        },
+        "gpt-5-nano": {
+          "name": "gpt-5-nano"
+        },
+        "autoclaw": {
+          "name": "autoclaw"
+        },
+        "autoclaw/eco": {
+          "name": "autoclaw/eco"
+        },
+        "autoclaw/premium": {
+          "name": "autoclaw/premium"
+        },
+        "gemini-3-flash-preview": {
+          "name": "gemini-3-flash-preview"
+        },
+        "gemini-3-pro-preview": {
+          "name": "gemini-3-pro-preview"
+        }
+      }
+    }
+  }
+}
