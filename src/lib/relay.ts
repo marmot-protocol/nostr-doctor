@@ -15,6 +15,7 @@ export const LOOKUP_RELAYS = relaySet([
   "wss://purplepag.es",
   "wss://index.hzrd149.com",
   "wss://indexer.coracle.social",
+  "wss://user.kindpag.es",
 ]);
 
 export const pool = new RelayPool();
