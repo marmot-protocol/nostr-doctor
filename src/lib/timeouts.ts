@@ -34,6 +34,11 @@ export const RELAY_REQUEST_TIMEOUT_MS = 8_000;
 export const VERDICT_TIMEOUT_MS = 15_000;
 
 /**
+ * The Maximum time to wait for the entire loader to complete.
+ */
+export const LOADER_TIMEOUT_MS = 30_000;
+
+/**
  * Hard cap on the full broadcast operation. If publishing all metadata events
  * to all relays has not completed within this window, the report advances
  * automatically.

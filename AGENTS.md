@@ -71,12 +71,16 @@ src/
 │   └── timeouts.ts       # Shared timeout constants for all report pages
 └── pages/
     ├── reports.tsx       # REPORTS registry — add new diagnostic pages here
-    ├── reports/          # One file per diagnostic report page
+    ├── reports/          # One folder per diagnostic report
+    │   ├── loader-types.ts          # Shared LoaderState<T> type
+    │   └── <report-name>/
+    │       ├── loader.ts            # Pure RxJS loader — must complete + shareReplay(1)
+    │       └── page.tsx             # React component — loading/report modes
     ├── complete/         # Terminal destination after all report pages
     └── signin/           # Sign-in flow (layout + method pages)
 ```
 
-**Adding a diagnostic page:** create a component in `src/pages/reports/`, then register it in `src/pages/reports.tsx`. The `next()` context method walks the `REPORTS` array in order and navigates to `/complete` after the last entry.
+**Adding a diagnostic page:** create a folder `src/pages/reports/<kebab-name>/` with `loader.ts` and `page.tsx`, then register it in `src/pages/reports.tsx`. See **Report Loader Architecture** below for the full contract. The `next()` context method walks the `REPORTS` array in order and navigates to `/complete` after the last entry.
 
 ---
 
@@ -237,32 +241,158 @@ Consult the applesauce MCP server for API details. Consult the nostr MCP for NIP
 
 ---
 
+## Report Loader Architecture
+
+Every diagnostic report is split into three concerns across two files inside `src/pages/reports/<kebab-name>/`:
+
+| File        | Responsibility                                                     |
+| ----------- | ------------------------------------------------------------------ |
+| `loader.ts` | Pure RxJS — streams raw state as fetches resolve. No UI concepts.  |
+| `page.tsx`  | React component — renders loading/report modes, owns all mutations |
+
+See `docs/streaming-state-loaders.md` for the full pattern reference and RxJS recipes.
+
+### `LoaderState<T>`
+
+```ts
+// src/pages/reports/loader-types.ts
+export type LoaderState<T> = {
+  data: T; // current accumulated state (may be partial during load)
+  complete: boolean; // true on the final emission only
+};
+```
+
+`LoaderState<T>` is a **page-layer type** produced by the `toLoaderState()` operator in `src/observable/toLoaderState.ts`. Loaders themselves return `Observable<TState>` — not `Observable<LoaderState<TState>>`.
+
+### `createLoader(user: User)` contract
+
+Every `loader.ts` exports one function with this signature:
+
+```ts
+import type { User } from "applesauce-common/casts";
+import type { Observable } from "rxjs";
+
+export function createLoader(user: User): Observable<TState> { ... }
+```
+
+**Rules that every loader must follow:**
+
+1. **Pure RxJS** — no React imports, no hooks, no context. Receives `User` as its only argument.
+2. **Returns `Observable<TState>`** — raw state only. The `LoaderState` wrapper (`complete` flag) is applied by `toLoaderState()` at the page layer, not in the loader.
+3. **Streams state as it builds** — use `combineLatest` + `startWith(null)` on parallel sources so the state object updates incrementally as each fetch resolves. The page sees partial state immediately. **Critical:** `combineLatest` will not emit anything until every inner observable has emitted at least once. Every inner observable passed to `combineLatest` MUST use `startWith(initialValue)`. A missing `startWith` on any one source silently hangs the entire loader — no partial state, no terminal emission, report stuck in loading mode even after `takeUntil` fires.
+4. **Classify data before choosing a source:**
+   - **Primary output** (event being diagnosed) → `eventLoader({ kind, pubkey })` + `last(null, null)`. Completes after EOSE; never emits `undefined`; no timeout-disarm risk.
+   - **Required input from cache** (e.g. outbox URLs for a downstream pool request) → `user.outboxes$` (or other `User` cast observable) + `defined()` + `first()`. Fast from cache; `defined()` from `applesauce-core/observable` safely skips `undefined` and `null`.
+5. **Never use `eventStore.replaceable()` for event fetching in loaders** — it emits `undefined` synchronously on cache-miss, which silently disarms any timeout before the relay fetch starts.
+6. **Use `relaySet()` when building relay lists for pool requests** — `relaySet(...sources)` from `applesauce-core/helpers` accepts `undefined`/`null` entries and ignores them, merges and deduplicates, and always returns `string[]`. Use it to safely combine outboxes with fallback relays: `relaySet(outboxes, LOOKUP_RELAYS)`.
+7. **`shareReplay(1)` last** — required on every loader. Prevents re-execution when multiple subscribers attach (React StrictMode double-invoke, `toLoaderState()` subscription). Late subscribers after completion receive the final state immediately.
+8. **Error-safe** — use `catchError` internally. Map errors into the state type (null fields). The observable must never error to the page.
+
+### How the page consumes the loader
+
+```tsx
+function MyReport() {
+  const { subject, next, publish } = useReport();
+
+  const loaderState = use$(
+    () =>
+      subject
+        ? createLoader(subject).pipe(
+            // takeUntil gives the whole pipeline a hard deadline.
+            // toLoaderState() detects completion and stamps complete: true.
+            takeUntil(timer(EVENT_LOAD_TIMEOUT_MS)),
+            toLoaderState(),
+          )
+        : undefined,
+    [subject?.pubkey],
+  );
+
+  // undefined  → observable not yet emitted (loading)
+  // complete: false → partial state mid-stream (loading)
+  // complete: true  → final state (report mode)
+  const isLoading = !loaderState?.complete;
+  const state = loaderState?.data;
+
+  if (isLoading) {
+    // Render spinner + any partial state already in `state`
+    return <LoadingView partial={state} onSkip={next} />;
+  }
+  return <ReportView state={state!} next={next} publish={publish} />;
+}
+```
+
+**During loading**, render a spinner at the top plus whatever partial `state` data is already available. Individual relay rows or field lists can appear and fill in as the stream progresses — the loading indicator just sits at the top until `complete: true`.
+
+**`takeUntil` placement** — before `toLoaderState()`, on the raw state stream. When the deadline fires, `toLoaderState()` detects the completion and emits the last partial state as `{ complete: true }`.
+
+### Loader vs page responsibility
+
+**Rule: if data determines a report verdict, it belongs in the loader.**
+The page only owns user interaction state.
+
+| Concern                                                | Loader | Page |
+| ------------------------------------------------------ | ------ | ---- |
+| Fetching events from store or relays                   | ✓      |      |
+| Relay list resolution                                  | ✓      |      |
+| Per-relay presence checks (metadata-broadcast)         | ✓      |      |
+| Per-relay NIP-11 / supported NIPs (search-relay-nip50) | ✓      |      |
+| Per-relay auth probing (dm-relay-auth)                 | ✓      |      |
+| Per-relay online/offline verdict (dead-relays)         | ✓      |      |
+| Checkbox / selection UI state                          |        | ✓    |
+| Publish actions                                        |        | ✓    |
+| Navigation (next / skip)                               |        | ✓    |
+| Auto-advance timers                                    |        | ✓    |
+| `takeUntil(timer(N))` deadline                         |        | ✓    |
+| `toLoaderState()` wrapping                             |        | ✓    |
+
+**Why verdict data belongs in the loader:** `relay.supported$`, `probeRelayAuth()`,
+and `relayVerdict()` are all completable observables (complete after a fetch or
+timeout). They compose cleanly into the loader's `combineLatest` fan-out. Keeping
+them in the page creates React hook-based async state management that duplicates
+the loader pattern and is harder to reason about.
+
+**`combineLatestByKey`** (`src/observable/combineLatestByKey.ts`) — used inside
+`relayVerdict()` to fan out per-relay checks to each monitor without re-creating
+subscriptions when `monitors$` re-emits the same set of monitors.
+
+**Shared helpers** in `src/observable/relay-loaders.ts`:
+
+- `fetchRelayListUrls(kind, pubkey, hints?)` — fetch relay list event URLs
+- `relayNip11Streaming(url)` — per-relay NIP-11 with `startWith(null)` for `combineLatest`
+- `probeRelayAuth(url, pubkey)` — completable NIP-42 auth probe
+
+**`relayVerdict(url)`** in `src/lib/relay-monitors.ts` — computes online/offline
+verdict using `monitors$` + `combineLatestByKey`.
+
+---
+
 ## Report Page Design Contract
 
 This section defines the behavioral contract every diagnostic report page must follow.
 
 ### File & Registration
 
-1. Create the component in `src/pages/reports/<kebab-name>.tsx`
+1. Create the folder `src/pages/reports/<kebab-name>/` with `loader.ts` and `page.tsx`.
 2. Register it in `src/pages/reports.tsx` by adding an entry to `REPORTS`:
    ```ts
    {
      name: "my-report",
-     Component: lazy(() => import("./reports/my-report.tsx")),
+     Component: lazy(() => import("./reports/my-report/page.tsx")),
    }
    ```
 3. Routes are automatically created at `/r/<name>` by `AppContext`.
 
 ### Loading State
 
-Show a spinner **plus a short progress description** while fetching:
+Show a spinner **plus a short progress description** while fetching. Render any partial `state` data already available — individual rows can fill in as the stream progresses:
 
 ```tsx
-if (!dataLoaded) {
+if (isLoading) {
   return (
-    <div className="flex flex-col items-center gap-6 py-8">
+    <div className="flex flex-col gap-6">
       <span className="loading loading-spinner loading-lg text-primary" />
       <p className="text-sm text-base-content/60">Loading your profile…</p>
+      {/* render partial state here if useful */}
       <button className="btn btn-ghost btn-sm" onClick={next}>
         Skip
       </button>
@@ -273,51 +403,20 @@ if (!dataLoaded) {
 
 **Always show a Skip button during loading** — from the very first frame, not only after a timeout fires.
 
-### Loading Timeout — Stream Level
+**The three loader states:**
 
-**Never let a user get stuck on a loading spinner.** Timeouts belong in the data stream, not in React state. Pipe a `timeout` operator directly on the observable so the stream resolves to `null` (not found / timed out) rather than staying `undefined` (loading) forever.
-
-```ts
-import { of, timeout } from "rxjs";
-
-const PROFILE_LOAD_TIMEOUT_MS = 10_000;
-
-// In the use$() factory:
-const profile = use$(
-  () =>
-    subjectUser
-      ? subjectUser.profile$.pipe(
-          timeout({ first: PROFILE_LOAD_TIMEOUT_MS, with: () => of(null) }),
-        )
-      : undefined,
-  [subjectUser?.pubkey],
-);
-```
-
-**The three stream states:**
-
-| Value       | Meaning                              | UI to show                      |
-| ----------- | ------------------------------------ | ------------------------------- |
-| `undefined` | Stream has not emitted yet (loading) | Spinner + Skip button           |
-| `null`      | Stream timed out — data not found    | "Not found" state + Next button |
-| value       | Data arrived successfully            | Normal report content           |
+| Value                            | Meaning                        | UI to show                |
+| -------------------------------- | ------------------------------ | ------------------------- |
+| `loaderState === undefined`      | Observable not yet emitted     | Spinner + Skip button     |
+| `loaderState.complete === false` | Partial state, still streaming | Spinner + partial content |
+| `loaderState.complete === true`  | Final state, report ready      | Full report UI            |
 
 ```tsx
-const dataLoaded = data !== undefined; // false = still loading
-const dataNotFound = data === null; // true = timed out
-
-if (!dataLoaded) {
-  /* spinner + Skip */
-}
-if (dataNotFound) {
-  /* not-found message + Next */
-}
-// otherwise: render report content
+const isLoading = !loaderState?.complete;
+const state = loaderState?.data; // may be partial/undefined during loading
 ```
 
-This approach lets each report **still provide partial help** (e.g. "no profile found — you may want to create one") rather than just offering a generic Skip.
-
-**Hook ordering:** Derived booleans like `dataLoaded` must be declared **before** any `useEffect` that references them. TypeScript enforces this at compile time.
+**Timeouts belong in the loader**, not in React state. The loader uses `timeout({ first: N, with: () => of(null) })` + `first()` or `takeUntil(timer(N))` + `last()` to guarantee the observable completes. The page never needs its own timeout for data fetching.
 
 **Verdict timeouts:** For pages that check per-relay or per-item statuses (which may stay `"unknown"` indefinitely), use a React-layer `setTimeout` as a secondary timeout (e.g. 15 s) since per-item status streams already have their own per-item timeouts (see `relayStatusWithTimeout`). After the secondary timeout fires, treat remaining `"unknown"` items as skippable and enable the Next button:
 
@@ -407,13 +506,21 @@ Each report page chooses its own relay strategy. The **recommended approach** is
 
 ### State Management Pattern
 
-Use `useState` with discriminated boolean flags — consistent with the existing pages:
+Report data comes from the loader via `use$`. Page-local UI state uses `useState` with discriminated boolean flags:
 
 ```ts
-const [loading, setLoading] = useState(true);
-const [error, setError] = useState<string | null>(null);
-const [data, setData] = useState<MyDataType | null>(null);
+// Loader state — driven by createLoader()
+const loaderState = use$(
+  () => (subject ? createLoader(subject) : undefined),
+  [subject?.pubkey],
+);
+const isLoading = !loaderState?.complete;
+const state = loaderState?.data;
+
+// Page-local mutation state
+const [publishing, setPublishing] = useState(false);
 const [done, setDone] = useState(false);
+const [error, setError] = useState<string | null>(null);
 ```
 
 Avoid `useReducer` unless the state transitions become genuinely complex.

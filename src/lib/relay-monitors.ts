@@ -6,15 +6,19 @@ import { mapEventsToStore, simpleTimeout } from "applesauce-core/observable";
 import {
   catchError,
   combineLatest,
-  firstValueFrom,
   map,
+  Observable,
   of,
   shareReplay,
   startWith,
-  takeWhile,
-  timeout,
+  switchMap,
+  takeUntil,
+  timer,
 } from "rxjs";
+import { combineLatestByIndex } from "../observable/operator/combine-latest-by-index.ts";
+import { timeoutWithIgnore } from "../observable/operator/timeout-with-ignore.ts";
 import { eventLoader, eventStore } from "./store.ts";
+import { VERDICT_TIMEOUT_MS } from "./timeouts.ts";
 
 /** The canonical NIP-66 relay that publishes kind:10166 monitor announcements. */
 export const MONITOR_RELAYS = relaySet(["wss://relay.nostr.watch/"]);
@@ -55,52 +59,68 @@ export const monitors$ = combineLatest(
   ),
 ).pipe(
   // Filter out null values
-  map((monitors) => monitors.filter((m) => m !== null && m !== undefined)),
+  map((monitors) =>
+    monitors.filter((m): m is RelayMonitor => m !== null && m !== undefined),
+  ),
   // Cache list of monitors
   shareReplay(1),
 );
 
-/** Load a single relay monitor by pubkey */
-export async function getMonitor(
-  pubkey: string,
-): Promise<RelayMonitor | undefined> {
-  return firstValueFrom(
-    eventLoader({
-      kind: RELAY_MONITOR_ANNOUNCEMENT_KIND,
-      pubkey,
-      relays: MONITOR_RELAYS,
-    }).pipe(
-      simpleTimeout(FETCH_TIMEOUT_MS),
-      mapEventsToStore(eventStore),
-      castEventStream(RelayMonitor, eventStore),
-      catchError(() => of(undefined)),
-    ),
-  );
-}
+export type RelayVerdict = "online" | "offline" | "unknown";
 
-/** Observable of status for a single relay from a monitor; emits `undefined` while loading, then `RelayDiscovery` or `null` (unknown/timeout). */
-export function relayStatusWithTimeout(
-  monitor: RelayMonitor,
-  relayUrl: string,
-) {
-  return monitor
-    .relayStatus(normalizeURL(relayUrl))
-    .pipe(
-      startWith(undefined),
-      timeout({ first: FETCH_TIMEOUT_MS, with: () => of(null) }),
-    );
-}
+/**
+ * Computes the online/offline verdict for a relay URL across all approved
+ * monitors using majority vote.
+ *
+ * Uses `combineLatestByKey` on `monitors$` so that when monitors$ re-emits
+ * (as more monitors load), only NEW monitors get new child subscriptions —
+ * existing monitor subscriptions are kept alive and not re-created.
+ *
+ * With the fixed `combineLatestByKey`, the outer observable keeps streaming
+ * after `monitors$` completes (all monitor events loaded) — child
+ * `relayStatusWithTimeout` subscriptions remain alive until THEY complete.
+ *
+ * `takeUntil(timer(VERDICT_TIMEOUT_MS))` bounds the entire verdict check.
+ * This ensures the observable always completes and each child
+ * `relayStatusWithTimeout` has `FETCH_TIMEOUT_MS` (5s) to resolve per monitor.
+ *
+ * Verdict logic:
+ *   - "online"  → majority (>50%) of monitors with loaded data show rttOpen
+ *   - "offline" → majority show no rttOpen
+ *   - "unknown" → no loaded data yet
+ */
+export function relayVerdict(relay: string): Observable<RelayVerdict> {
+  return monitors$.pipe(
+    combineLatestByIndex(
+      // Each monitor gets a stable child subscription for this relay's status
+      switchMap((monitor: RelayMonitor) =>
+        monitor.relayStatus(normalizeURL(relay)).pipe(
+          timeoutWithIgnore({
+            first: FETCH_TIMEOUT_MS,
+            with: () => of(null),
+            ignore: [undefined],
+          }),
+          startWith(undefined),
+          catchError(() => of(null)),
+        ),
+      ),
+    ),
+    map((statuses) => {
+      const loaded = statuses.filter((s) => s !== undefined);
+      if (loaded.length === 0) return "unknown" as RelayVerdict;
 
-/** Returns an observable of a map of relay statuses from a monitor, relay status is `null` when unknown and `undefined` when loading */
-export function relayStatuses(monitor: RelayMonitor, relays: string[]) {
-  return combineLatest(
-    Object.fromEntries(
-      relays.map((relay) => [relay, relayStatusWithTimeout(monitor, relay)]),
-    ),
-  ).pipe(
-    // Complete when all statuses are known
-    takeWhile((statuses) =>
-      Object.values(statuses).every((status) => status !== undefined),
-    ),
+      const online = loaded.filter(
+        (s) =>
+          s !== null &&
+          (s as { rttOpen?: number }).rttOpen !== undefined &&
+          (s as { rttOpen?: number }).rttOpen! > 0,
+      ).length;
+
+      return (
+        online > loaded.length / 2 ? "online" : "offline"
+      ) as RelayVerdict;
+    }),
+    // Hard deadline: cut the verdict stream after VERDICT_TIMEOUT_MS.
+    takeUntil(timer(VERDICT_TIMEOUT_MS)),
   );
 }

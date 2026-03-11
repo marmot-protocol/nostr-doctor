@@ -1,52 +1,55 @@
-import { useEffect, useMemo, useState } from "react";
-import { of, timeout } from "rxjs";
+import { useEffect, useState } from "react";
 import { setContent } from "applesauce-core/operations";
 import { use$ } from "applesauce-react/hooks";
-import { useReport } from "../../context/ReportContext.tsx";
-import { eventStore } from "../../lib/store.ts";
-import { factory } from "../../lib/factory.ts";
-import { AUTO_ADVANCE_MS, EVENT_LOAD_TIMEOUT_MS } from "../../lib/timeouts.ts";
+import { timer } from "rxjs";
+import { takeUntil } from "rxjs/operators";
+import { toLoaderState } from "../../../observable/operator/to-loader-state.ts";
+import { useReport } from "../../../context/ReportContext.tsx";
+import { eventStore } from "../../../lib/store.ts";
+import { factory } from "../../../lib/factory.ts";
+import {
+  AUTO_ADVANCE_MS,
+  EVENT_LOAD_TIMEOUT_MS,
+} from "../../../lib/timeouts.ts";
+import { createLoader } from "./loader.ts";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// FieldRow — a single selectable non-standard field
 // ---------------------------------------------------------------------------
 
-/**
- * Parse the embedded relay map from a kind:3 content field.
- * Old clients stored a relay config object here, e.g.:
- *   { "wss://relay.damus.io": { "read": true, "write": true }, ... }
- * Returns the relay URLs if present, or null if the content is empty/invalid.
- */
-function parseEmbeddedRelays(content: string): string[] | null {
-  if (!content || content.trim() === "") return null;
-  try {
-    const parsed: unknown = JSON.parse(content);
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return null;
-    }
-    const keys = Object.keys(parsed);
-    return keys.length > 0 ? keys : null;
-  } catch {
-    return null;
+function FieldRow({
+  fieldKey,
+  value,
+  checked,
+  onChange,
+}: {
+  fieldKey: string;
+  value: unknown;
+  checked: boolean;
+  onChange: (key: string, checked: boolean) => void;
+}) {
+  function truncate(v: unknown, max = 60): string {
+    const str = typeof v === "object" ? JSON.stringify(v) : String(v);
+    return str.length > max ? str.slice(0, max) + "…" : str;
   }
-}
 
-// ---------------------------------------------------------------------------
-// EmbeddedRelayRow — a single relay URL from the embedded map
-// ---------------------------------------------------------------------------
-
-function EmbeddedRelayRow({ relayUrl }: { relayUrl: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-base-200 p-3">
-      <div className="size-2 rounded-full bg-warning shrink-0" />
-      <span className="font-mono text-sm text-base-content/80 break-all">
-        {relayUrl}
-      </span>
-    </div>
+    <label className="flex items-start gap-3 rounded-xl border border-base-200 p-3 cursor-pointer hover:bg-base-200/40 transition-colors">
+      <input
+        type="checkbox"
+        className="checkbox checkbox-sm mt-0.5 shrink-0"
+        checked={checked}
+        onChange={(e) => onChange(fieldKey, e.target.checked)}
+      />
+      <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+        <span className="font-mono text-sm font-medium text-base-content">
+          {fieldKey}
+        </span>
+        <span className="text-xs text-base-content/50 break-all">
+          {truncate(value)}
+        </span>
+      </div>
+    </label>
   );
 }
 
@@ -54,50 +57,44 @@ function EmbeddedRelayRow({ relayUrl }: { relayUrl: string }) {
 // Main page
 // ---------------------------------------------------------------------------
 
-function FollowListRelaysReport() {
-  const { subject: subjectUser, next, publish: publishEvent } = useReport();
+function ProfileMetadataReport() {
+  const { subject, next, publish: publishEvent } = useReport();
 
-  // Subscribe to the user's kind:3 contacts event.
-  // Pipes a timeout so the stream resolves to null (not found) rather than
-  // staying undefined (loading) forever if kind:3 never arrives from relays.
-  const contacts = use$(
+  // ---------------------------------------------------------------------------
+  // Loader — raw Observable<ProfileMetadataState> wrapped by toLoaderState()
+  // takeUntil provides the hard deadline; toLoaderState() stamps complete: true
+  // ---------------------------------------------------------------------------
+  const loaderState = use$(
     () =>
-      subjectUser
-        ? subjectUser.contacts$.pipe(
-            timeout({ first: EVENT_LOAD_TIMEOUT_MS, with: () => of(null) }),
+      subject
+        ? createLoader(subject).pipe(
+            takeUntil(timer(EVENT_LOAD_TIMEOUT_MS)),
+            toLoaderState(),
           )
         : undefined,
-    [subjectUser?.pubkey],
+    [subject?.pubkey],
   );
 
-  // Get the raw event from the store to inspect the content field directly
-  const rawEvent = subjectUser?.pubkey
-    ? eventStore.getReplaceable(3, subjectUser.pubkey)
-    : null;
+  const isLoading = !loaderState?.complete;
+  const state = loaderState?.data;
 
-  // Parse embedded relays out of the kind:3 content field
-  const embeddedRelays = useMemo<string[] | null>(() => {
-    if (!rawEvent) return null;
-    return parseEmbeddedRelays(rawEvent.content);
-  }, [rawEvent]);
-
+  // ---------------------------------------------------------------------------
+  // Page-local UI state
+  // ---------------------------------------------------------------------------
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [publishing, setPublishing] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // contacts is undefined while loading, null if timed-out/not-found, value when loaded
-  const contactsLoaded = contacts !== undefined;
-  const contactsNotFound = contacts === null;
-  const isClean =
-    contactsLoaded && !contactsNotFound && embeddedRelays === null;
-
-  // Auto-advance when already clean (no embedded relays)
+  // Pre-select all non-standard keys when the report first loads
   useEffect(() => {
-    if (isClean) {
-      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
-      return () => clearTimeout(timer);
+    if (!isLoading && state?.nonStandardFields) {
+      setSelected(
+        new Set(state.nonStandardFields.map(([k]: [string, unknown]) => k)),
+      );
     }
-  }, [isClean, next]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading]);
 
   // Auto-advance after successful publish
   useEffect(() => {
@@ -107,36 +104,70 @@ function FollowListRelaysReport() {
     }
   }, [done, next]);
 
-  async function handleRemove() {
-    if (!subjectUser) return;
+  // Auto-advance if profile is clean (no non-standard fields)
+  const profileClean =
+    !isLoading &&
+    state?.event !== null &&
+    state?.nonStandardFields.length === 0;
+
+  useEffect(() => {
+    if (profileClean) {
+      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
+      return () => clearTimeout(timer);
+    }
+  }, [profileClean, next]);
+
+  // ---------------------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------------------
+
+  async function handlePublish(keysToRemove: Set<string>) {
+    if (!subject) return;
     setPublishing(true);
     setError(null);
     try {
-      const existing = eventStore.getReplaceable(3, subjectUser.pubkey);
-      if (!existing) throw new Error("Could not find your follow list event.");
-      const draft = await factory.modify(existing, setContent(""));
+      const existing = eventStore.getReplaceable(0, subject.pubkey);
+      if (!existing) throw new Error("Could not find your profile event.");
+      const currentContent = JSON.parse(existing.content) as Record<
+        string,
+        unknown
+      >;
+      const cleaned = Object.fromEntries(
+        Object.entries(currentContent).filter(([k]) => !keysToRemove.has(k)),
+      );
+      const draft = await factory.modify(
+        existing,
+        setContent(JSON.stringify(cleaned)),
+      );
       await publishEvent(draft);
       setDone(true);
     } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Failed to publish follow list.",
-      );
+      setError(e instanceof Error ? e.message : "Failed to publish profile.");
     } finally {
       setPublishing(false);
     }
   }
 
+  function handleToggle(key: string, checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
   // ---------------------------------------------------------------------------
-  // Loading state — contacts stream has not yet emitted
+  // Loading state
   // ---------------------------------------------------------------------------
-  if (!contactsLoaded) {
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
           <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6 items-center">
             <span className="loading loading-spinner loading-lg text-primary" />
             <p className="text-sm text-base-content/60">
-              Loading your follow list…
+              Loading your profile…
             </p>
             <button className="btn btn-ghost btn-sm" onClick={next}>
               Skip
@@ -148,24 +179,24 @@ function FollowListRelaysReport() {
   }
 
   // ---------------------------------------------------------------------------
-  // Not found — stream timed out, no kind:3 event found
+  // Profile not found — loader completed with event: null
   // ---------------------------------------------------------------------------
-  if (contactsNotFound) {
+  if (state?.event === null) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
           <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
             <div>
               <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
-                Follow List Cleanup
+                Profile Metadata
               </p>
               <h1 className="text-2xl font-semibold text-base-content">
-                No follow list found
+                Profile not found
               </h1>
             </div>
             <div className="bg-warning/10 border border-warning/30 rounded-xl p-4 text-sm text-warning">
-              No kind:3 follow list event could be found for this account. It
-              may not exist yet, or relays were unreachable.
+              No kind:0 profile event could be found for this account. It may
+              not exist yet, or relays were unreachable.
             </div>
             <button className="btn btn-outline btn-sm w-full" onClick={next}>
               Next
@@ -177,9 +208,9 @@ function FollowListRelaysReport() {
   }
 
   // ---------------------------------------------------------------------------
-  // All-clear — no embedded relays in content (auto-advancing)
+  // All-clear — profile has no non-standard fields (auto-advancing)
   // ---------------------------------------------------------------------------
-  if (isClean) {
+  if (profileClean) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
@@ -201,10 +232,10 @@ function FollowListRelaysReport() {
             </div>
             <div className="text-center">
               <h2 className="text-lg font-semibold text-base-content">
-                Follow list is clean
+                Profile looks clean
               </h2>
               <p className="text-sm text-base-content/60 mt-1">
-                No embedded relay data found in your follow list.
+                No non-standard fields found in your profile metadata.
               </p>
             </div>
             <span className="loading loading-dots loading-sm text-base-content/40" />
@@ -218,7 +249,7 @@ function FollowListRelaysReport() {
   }
 
   // ---------------------------------------------------------------------------
-  // Done — embedded relays removed and published (auto-advancing)
+  // Done — fields were removed and published (auto-advancing)
   // ---------------------------------------------------------------------------
   if (done) {
     return (
@@ -242,10 +273,10 @@ function FollowListRelaysReport() {
             </div>
             <div className="text-center">
               <h2 className="text-lg font-semibold text-base-content">
-                Follow list cleaned
+                Profile cleaned
               </h2>
               <p className="text-sm text-base-content/60 mt-1">
-                Your updated follow list has been published.
+                Your updated profile has been published.
               </p>
             </div>
             <span className="loading loading-dots loading-sm text-base-content/40" />
@@ -256,8 +287,10 @@ function FollowListRelaysReport() {
   }
 
   // ---------------------------------------------------------------------------
-  // Main view — embedded relays found
+  // Report mode — non-standard fields found
   // ---------------------------------------------------------------------------
+  const nonStandardFields = state?.nonStandardFields ?? [];
+
   return (
     <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
@@ -265,33 +298,29 @@ function FollowListRelaysReport() {
           {/* Header */}
           <div>
             <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
-              Follow List Cleanup
+              Profile Metadata
             </p>
             <h1 className="text-2xl font-semibold text-base-content">
-              Embedded relay data
+              Non-standard fields
             </h1>
             <p className="text-sm text-base-content/60 mt-1">
-              Your follow list has{" "}
-              {embeddedRelays!.length === 1
-                ? "1 relay"
-                : `${embeddedRelays!.length} relays`}{" "}
-              stored in its content field. This is leftover from older clients
-              and is no longer used — NIP-65 (kind:10002) is the modern
-              standard.
+              {nonStandardFields.length} non-standard{" "}
+              {nonStandardFields.length === 1 ? "field" : "fields"} found in
+              your profile. Select the ones you want to remove.
             </p>
           </div>
 
-          {/* Embedded relay list */}
+          {/* Field list */}
           <div className="flex flex-col gap-2">
-            {embeddedRelays!.map((url) => (
-              <EmbeddedRelayRow key={url} relayUrl={url} />
+            {nonStandardFields.map(([key, value]: [string, unknown]) => (
+              <FieldRow
+                key={key}
+                fieldKey={key}
+                value={value}
+                checked={selected.has(key)}
+                onChange={handleToggle}
+              />
             ))}
-          </div>
-
-          {/* Info callout */}
-          <div className="bg-base-200/60 rounded-xl p-3 text-xs text-base-content/60">
-            Removing this data will not affect your follows. It only clears the
-            unused relay map from the event content field.
           </div>
 
           {/* Error */}
@@ -303,17 +332,36 @@ function FollowListRelaysReport() {
 
           {/* Actions */}
           <div className="flex flex-col gap-2">
-            <button
-              className="btn btn-primary w-full"
-              onClick={handleRemove}
-              disabled={publishing}
-            >
-              {publishing ? (
-                <span className="loading loading-spinner loading-xs" />
-              ) : (
-                "Remove Embedded Relays"
-              )}
-            </button>
+            <div className="flex gap-2">
+              <button
+                className="btn btn-primary flex-1"
+                onClick={() => handlePublish(selected)}
+                disabled={publishing || selected.size === 0}
+              >
+                {publishing ? (
+                  <span className="loading loading-spinner loading-xs" />
+                ) : (
+                  `Remove Selected (${selected.size})`
+                )}
+              </button>
+              <button
+                className="btn btn-error"
+                onClick={() =>
+                  handlePublish(
+                    new Set(
+                      nonStandardFields.map(([k]: [string, unknown]) => k),
+                    ),
+                  )
+                }
+                disabled={publishing}
+              >
+                {publishing ? (
+                  <span className="loading loading-spinner loading-xs" />
+                ) : (
+                  "Remove All"
+                )}
+              </button>
+            </div>
             <button
               className="btn btn-ghost w-full"
               onClick={next}
@@ -328,4 +376,4 @@ function FollowListRelaysReport() {
   );
 }
 
-export default FollowListRelaysReport;
+export default ProfileMetadataReport;

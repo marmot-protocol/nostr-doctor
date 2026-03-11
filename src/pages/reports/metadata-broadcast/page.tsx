@@ -1,18 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { NostrEvent } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
-import { EMPTY, timeout } from "rxjs";
-import { useReport } from "../../context/ReportContext.tsx";
-import { pool, LOOKUP_RELAYS } from "../../lib/relay.ts";
+import { timer } from "rxjs";
+import { takeUntil } from "rxjs/operators";
+import { toLoaderState } from "../../../observable/operator/to-loader-state.ts";
+import { useReport } from "../../../context/ReportContext.tsx";
+import { pool } from "../../../lib/relay.ts";
 import {
   AUTO_ADVANCE_MS,
   BROADCAST_TIMEOUT_MS,
-  OUTBOX_LOAD_TIMEOUT_MS,
-  RELAY_REQUEST_TIMEOUT_MS,
-} from "../../lib/timeouts.ts";
+  EVENT_LOAD_TIMEOUT_MS,
+} from "../../../lib/timeouts.ts";
+import { createLoader, METADATA_KINDS } from "./loader.ts";
+import type { MetadataBroadcastState } from "./loader.ts";
 
 // ---------------------------------------------------------------------------
-// Metadata kinds we check for
+// Types
 // ---------------------------------------------------------------------------
 
 type KindEntry = {
@@ -21,7 +24,7 @@ type KindEntry = {
   description: string;
 };
 
-const METADATA_KINDS: KindEntry[] = [
+const METADATA_KIND_ENTRIES: KindEntry[] = [
   { kind: 0, label: "profile", description: "User Metadata (kind:0)" },
   { kind: 3, label: "follows", description: "Follow List (kind:3)" },
   { kind: 10002, label: "relays", description: "Relay List (kind:10002)" },
@@ -37,19 +40,10 @@ const METADATA_KINDS: KindEntry[] = [
   },
 ];
 
-const ALL_KINDS = METADATA_KINDS.map((k) => k.kind);
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** Events found: relayUrl -> kind -> event */
-type RelayKindMap = Map<string, Map<number, NostrEvent>>;
-
 type RelayCheckState = "pending" | "checking" | "done";
 
 // ---------------------------------------------------------------------------
-// KindBadge — shows status of one kind for one relay
+// KindBadge
 // ---------------------------------------------------------------------------
 
 function KindBadge({
@@ -62,7 +56,6 @@ function KindBadge({
   relayState: RelayCheckState;
 }) {
   const isChecking = relayState === "checking" && event === undefined;
-
   if (isChecking) {
     return (
       <span
@@ -77,7 +70,6 @@ function KindBadge({
       </span>
     );
   }
-
   if (event !== undefined) {
     return (
       <span
@@ -88,8 +80,6 @@ function KindBadge({
       </span>
     );
   }
-
-  // Done checking, not found
   return (
     <span
       className="badge badge-ghost badge-xs opacity-40 shrink-0"
@@ -101,7 +91,7 @@ function KindBadge({
 }
 
 // ---------------------------------------------------------------------------
-// RelayRow — one row per relay being checked
+// RelayRow — shows per-relay coverage status
 // ---------------------------------------------------------------------------
 
 function RelayRow({
@@ -116,7 +106,6 @@ function RelayRow({
   const relay = useMemo(() => pool.relay(relayUrl), [relayUrl]);
   const info = use$(relay.information$);
   const iconUrl = use$(relay.icon$);
-
   const name = info?.name ?? relayUrl;
   const foundCount = kindMap?.size ?? 0;
   const isDone = checkState === "done";
@@ -155,10 +144,8 @@ function RelayRow({
           <span className="loading loading-spinner loading-xs text-base-content/30 shrink-0" />
         )}
       </div>
-
-      {/* Kind badges */}
       <div className="flex flex-wrap gap-1.5">
-        {METADATA_KINDS.map((ke) => (
+        {METADATA_KIND_ENTRIES.map((ke) => (
           <KindBadge
             key={ke.kind}
             kindEntry={ke}
@@ -172,159 +159,61 @@ function RelayRow({
 }
 
 // ---------------------------------------------------------------------------
+// Derive relay check state from loader state
+// A relay is "checking" once it appears in relayKindMap (even with empty Map),
+// "done" once its stream has completed (indicated by its kind count stabilising
+// — we approximate this by treating each relay as "checking" until RELAY_REQUEST_TIMEOUT_MS
+// fires via the page-level takeUntil that completes the loader).
+// Since we can't know per-relay completion from the merged state, we treat
+// all relays as "checking" while !loaderComplete and "done" after.
+// ---------------------------------------------------------------------------
+
+function deriveCheckState(
+  url: string,
+  relayKindMap: Map<string, Map<number, NostrEvent>>,
+  loaderComplete: boolean,
+): RelayCheckState {
+  if (!relayKindMap.has(url)) return "pending";
+  if (loaderComplete) return "done";
+  return "checking";
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
 function MetadataBroadcast() {
-  const { subject: subjectUser, next } = useReport();
+  const { subject, next } = useReport();
 
-  // ---------------------------------------------------------------------------
-  // Step 1 — load outbox relays
-  // ---------------------------------------------------------------------------
-  const outboxes = use$(
+  // -------------------------------------------------------------------------
+  // Loader — streams MetadataBroadcastState as each relay responds
+  // -------------------------------------------------------------------------
+  const loaderState = use$(
     () =>
-      subjectUser
-        ? subjectUser.outboxes$.pipe(
-            timeout({ first: OUTBOX_LOAD_TIMEOUT_MS, with: () => EMPTY }),
+      subject
+        ? createLoader(subject).pipe(
+            takeUntil(timer(EVENT_LOAD_TIMEOUT_MS)),
+            toLoaderState(),
           )
         : undefined,
-    [subjectUser?.pubkey],
+    [subject?.pubkey],
   );
 
-  // undefined = still loading; string[] | null after EMPTY completes immediately = treat as []
-  // EMPTY completes without emitting, so use$ will stay undefined until timeout fires
-  // We track outboxes as loaded once it's no longer undefined or after timeout
-  const outboxesLoaded = outboxes !== undefined;
+  const isLoading = !loaderState?.complete;
+  const state: MetadataBroadcastState | undefined = loaderState?.data;
 
-  // After timeout, outboxes will be undefined still (EMPTY never emits).
-  // We need a separate flag for "outbox phase done".
-  const [outboxTimedOut, setOutboxTimedOut] = useState(false);
-
-  useEffect(() => {
-    if (!subjectUser) return;
-    const timer = setTimeout(
-      () => setOutboxTimedOut(true),
-      OUTBOX_LOAD_TIMEOUT_MS + 100,
-    );
-    return () => clearTimeout(timer);
-  }, [subjectUser]);
-
-  // Outbox phase is complete once we have a real value OR the timer fired
-  const outboxPhaseComplete = outboxesLoaded || outboxTimedOut;
-
-  // ---------------------------------------------------------------------------
-  // Relay list — union of outbox relays + LOOKUP_RELAYS
-  // ---------------------------------------------------------------------------
-  const allRelays = useMemo<string[]>(() => {
-    const outboxList = Array.isArray(outboxes) ? outboxes : [];
-    const combined = [...outboxList, ...LOOKUP_RELAYS];
-    // Deduplicate, normalize trailing slash
-    const seen = new Set<string>();
-    return combined.filter((url) => {
-      const norm = url.replace(/\/$/, "");
-      if (seen.has(norm)) return false;
-      seen.add(norm);
-      return true;
-    });
-  }, [outboxes]);
-
-  // ---------------------------------------------------------------------------
-  // Step 2 — per-relay fetch
-  // ---------------------------------------------------------------------------
-
-  /** Events found per relay per kind */
-  const [relayKindMap, setRelayKindMap] = useState<RelayKindMap>(new Map());
-
-  /** Check state per relay */
-  const [relayStates, setRelayStates] = useState<Map<string, RelayCheckState>>(
-    new Map(),
+  const allRelays = useMemo(() => state?.allRelays ?? [], [state?.allRelays]);
+  const relayKindMap = useMemo(
+    () => state?.relayKindMap ?? new Map<string, Map<number, NostrEvent>>(),
+    [state?.relayKindMap],
   );
 
-  // Track which relay URLs we've already kicked off fetches for
-  const fetchedRelays = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (!outboxPhaseComplete || !subjectUser || allRelays.length === 0) return;
-
-    const subscriptions: { url: string; unsubscribe: () => void }[] = [];
-
-    // Batch-initialize all new relay states as "checking" before subscribing
-    const newRelays = allRelays.filter(
-      (url) => !fetchedRelays.current.has(url),
-    );
-    if (newRelays.length > 0) {
-      setRelayStates((prev) => {
-        const next = new Map(prev);
-        for (const url of newRelays) next.set(url, "checking");
-        return next;
-      });
-    }
-
-    for (const relayUrl of allRelays) {
-      if (fetchedRelays.current.has(relayUrl)) continue;
-      fetchedRelays.current.add(relayUrl);
-
-      const relay = pool.relay(relayUrl);
-      const sub = relay
-        .request({ kinds: ALL_KINDS, authors: [subjectUser.pubkey] })
-        .pipe(timeout({ first: RELAY_REQUEST_TIMEOUT_MS, with: () => EMPTY }))
-        .subscribe({
-          next: (event) => {
-            setRelayKindMap((prev) => {
-              const next = new Map(prev);
-              const kindMap = new Map(next.get(relayUrl) ?? []);
-              // Keep highest created_at per kind
-              const existing = kindMap.get(event.kind);
-              if (
-                existing === undefined ||
-                event.created_at > existing.created_at
-              ) {
-                kindMap.set(event.kind, event);
-              }
-              next.set(relayUrl, kindMap);
-              return next;
-            });
-          },
-          complete: () => {
-            setRelayStates((prev) => {
-              const next = new Map(prev);
-              next.set(relayUrl, "done");
-              return next;
-            });
-          },
-          error: () => {
-            setRelayStates((prev) => {
-              const next = new Map(prev);
-              next.set(relayUrl, "done");
-              return next;
-            });
-          },
-        });
-
-      subscriptions.push({
-        url: relayUrl,
-        unsubscribe: sub.unsubscribe.bind(sub),
-      });
-    }
-
-    return () => {
-      for (const { url, unsubscribe } of subscriptions) {
-        unsubscribe();
-        fetchedRelays.current.delete(url);
-      }
-    };
-  }, [outboxPhaseComplete, subjectUser, allRelays]);
-
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
   // Derived state
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  const allRelaysChecked = !isLoading && allRelays.length > 0;
 
-  const allRelaysChecked = useMemo(() => {
-    if (!outboxPhaseComplete || allRelays.length === 0) return false;
-    return allRelays.every((url) => relayStates.get(url) === "done");
-  }, [outboxPhaseComplete, allRelays, relayStates]);
-
-  // Unique best events per kind (highest created_at across all relays)
+  // Best event per kind across all relays (highest created_at)
   const bestEventsByKind = useMemo<Map<number, NostrEvent>>(() => {
     const result = new Map<number, NostrEvent>();
     for (const kindMap of relayKindMap.values()) {
@@ -338,23 +227,20 @@ function MetadataBroadcast() {
     return result;
   }, [relayKindMap]);
 
-  // All relays done and all kinds present everywhere — nothing to do
   const allKindsPresentEverywhere = useMemo(() => {
     if (!allRelaysChecked || allRelays.length === 0) return false;
     return allRelays.every((url) => {
       const kindMap = relayKindMap.get(url);
-      return METADATA_KINDS.every((ke) => kindMap?.has(ke.kind));
+      return METADATA_KINDS.every((k) => kindMap?.has(k));
     });
   }, [allRelaysChecked, allRelays, relayKindMap]);
 
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
   // Broadcast
-  // ---------------------------------------------------------------------------
-
+  // -------------------------------------------------------------------------
   const [broadcasting, setBroadcasting] = useState(false);
   const [done, setDone] = useState(false);
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
-  /** Number of events that have finished publishing (resolve or reject) */
   const [publishProgress, setPublishProgress] = useState(0);
 
   function handleBroadcast() {
@@ -362,18 +248,12 @@ function MetadataBroadcast() {
       next();
       return;
     }
-
     setBroadcasting(true);
     setBroadcastError(null);
     setPublishProgress(0);
-
     const events = Array.from(bestEventsByKind.values());
     const total = events.length;
-    // Track settled count in a closure variable; update React state for UI,
-    // and mark done once all promises have settled — all in async callbacks,
-    // never synchronously inside an effect.
     let settled = 0;
-
     function onSettled() {
       settled += 1;
       setPublishProgress(settled);
@@ -382,51 +262,71 @@ function MetadataBroadcast() {
         setBroadcasting(false);
       }
     }
-
     for (const event of events) {
       pool.publish(allRelays, event).then(onSettled).catch(onSettled);
     }
   }
 
-  // If broadcast takes too long, go to next report
   useEffect(() => {
     if (!broadcasting) return;
-    const timer = setTimeout(() => {
+    const t = setTimeout(() => {
       setBroadcasting(false);
       next();
     }, BROADCAST_TIMEOUT_MS);
-    return () => clearTimeout(timer);
+    return () => clearTimeout(t);
   }, [broadcasting, next]);
 
-  // Auto-advance after done
   useEffect(() => {
     if (done) {
-      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => next(), AUTO_ADVANCE_MS);
+      return () => clearTimeout(t);
     }
   }, [done, next]);
 
-  // Auto-advance when all-clear (everything present on every relay)
   useEffect(() => {
     if (allKindsPresentEverywhere) {
-      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => next(), AUTO_ADVANCE_MS);
+      return () => clearTimeout(t);
     }
   }, [allKindsPresentEverywhere, next]);
 
-  // ---------------------------------------------------------------------------
-  // Render: loading outboxes
-  // ---------------------------------------------------------------------------
-  if (!outboxPhaseComplete) {
+  // -------------------------------------------------------------------------
+  // Loading — show partial relay rows as they stream in
+  // -------------------------------------------------------------------------
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6 items-center">
-            <span className="loading loading-spinner loading-lg text-primary" />
-            <p className="text-sm text-base-content/60">
-              Loading your relay list…
-            </p>
-            <button className="btn btn-ghost btn-sm" onClick={next}>
+          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
+            <div className="flex items-center gap-4">
+              <span className="loading loading-spinner loading-lg text-primary shrink-0" />
+              <div>
+                <h1 className="text-lg font-semibold text-base-content">
+                  Metadata Broadcast
+                </h1>
+                <p className="text-sm text-base-content/60">
+                  {allRelays.length > 0
+                    ? `Checking ${allRelays.length} relays…`
+                    : "Loading relay list…"}
+                </p>
+              </div>
+            </div>
+
+            {/* Show relay rows as they stream in during loading */}
+            {allRelays.length > 0 && (
+              <div className="flex flex-col gap-3 max-h-80 overflow-y-auto">
+                {allRelays.map((url) => (
+                  <RelayRow
+                    key={url}
+                    relayUrl={url}
+                    kindMap={relayKindMap.get(url)}
+                    checkState={deriveCheckState(url, relayKindMap, false)}
+                  />
+                ))}
+              </div>
+            )}
+
+            <button className="btn btn-ghost btn-sm w-full" onClick={next}>
               Skip
             </button>
           </div>
@@ -435,9 +335,7 @@ function MetadataBroadcast() {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Render: all-clear (auto-advancing)
-  // ---------------------------------------------------------------------------
+  // All-clear (auto-advancing)
   if (allKindsPresentEverywhere) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
@@ -476,9 +374,7 @@ function MetadataBroadcast() {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Render: broadcasting (progress bar + timeout)
-  // ---------------------------------------------------------------------------
+  // Broadcasting
   if (broadcasting && bestEventsByKind.size > 0) {
     const total = bestEventsByKind.size;
     return (
@@ -495,13 +391,11 @@ function MetadataBroadcast() {
                 published
               </p>
             </div>
-            <div className="w-full flex flex-col gap-1">
-              <progress
-                className="progress progress-primary w-full"
-                value={publishProgress}
-                max={total}
-              />
-            </div>
+            <progress
+              className="progress progress-primary w-full"
+              value={publishProgress}
+              max={total}
+            />
             <p className="text-xs text-base-content/40">
               This may take a moment. You can skip to continue.
             </p>
@@ -514,9 +408,7 @@ function MetadataBroadcast() {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Render: done broadcasting (auto-advancing)
-  // ---------------------------------------------------------------------------
+  // Done
   if (done) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
@@ -555,22 +447,15 @@ function MetadataBroadcast() {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Render: main view — checking + broadcast
-  // ---------------------------------------------------------------------------
-
-  const checkingCount = allRelays.filter(
-    (url) => relayStates.get(url) === "checking",
-  ).length;
+  // Main view
   const doneCount = allRelays.filter(
-    (url) => relayStates.get(url) === "done",
+    (url) => deriveCheckState(url, relayKindMap, true) === "done",
   ).length;
 
   return (
     <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
-          {/* Header */}
           <div>
             <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
               Metadata Broadcast
@@ -585,37 +470,31 @@ function MetadataBroadcast() {
             </p>
           </div>
 
-          {/* Progress bar while checking */}
-          {!allRelaysChecked && allRelays.length > 0 && (
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between text-xs text-base-content/40">
-                <span>
-                  {doneCount} / {allRelays.length} checked
-                </span>
-                <span>{checkingCount} active</span>
-              </div>
-              <progress
-                className="progress progress-primary w-full"
-                value={doneCount}
-                max={allRelays.length}
-              />
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between text-xs text-base-content/40">
+              <span>
+                {doneCount} / {allRelays.length} checked
+              </span>
             </div>
-          )}
+            <progress
+              className="progress progress-primary w-full"
+              value={doneCount}
+              max={allRelays.length}
+            />
+          </div>
 
-          {/* Relay list */}
           <div className="flex flex-col gap-3 max-h-96 overflow-y-auto">
             {allRelays.map((url) => (
               <RelayRow
                 key={url}
                 relayUrl={url}
                 kindMap={relayKindMap.get(url)}
-                checkState={relayStates.get(url) ?? "pending"}
+                checkState={deriveCheckState(url, relayKindMap, true)}
               />
             ))}
           </div>
 
-          {/* Summary when done */}
-          {allRelaysChecked && bestEventsByKind.size > 0 && (
+          {bestEventsByKind.size > 0 && (
             <div className="bg-base-200/60 rounded-xl p-3 text-sm text-base-content/70">
               Found{" "}
               <span className="font-medium text-base-content">
@@ -628,44 +507,35 @@ function MetadataBroadcast() {
             </div>
           )}
 
-          {allRelaysChecked && bestEventsByKind.size === 0 && (
+          {bestEventsByKind.size === 0 && (
             <div className="bg-warning/10 border border-warning/30 rounded-xl p-3 text-sm text-warning">
               No metadata events were found on any of the checked relays.
             </div>
           )}
 
-          {/* Error */}
           {broadcastError && (
             <div className="bg-error/10 border border-error/30 rounded-xl p-3 text-xs text-error">
               {broadcastError}
             </div>
           )}
 
-          {/* Actions */}
           <div className="flex flex-col gap-2">
-            {allRelaysChecked ? (
-              <button
-                className="btn btn-primary w-full"
-                onClick={handleBroadcast}
-                disabled={broadcasting || bestEventsByKind.size === 0}
-              >
-                {broadcasting ? (
-                  <>
-                    <span className="loading loading-spinner loading-xs" />
-                    Broadcasting…
-                  </>
-                ) : bestEventsByKind.size === 0 ? (
-                  "Nothing to broadcast"
-                ) : (
-                  `Broadcast ${bestEventsByKind.size} ${bestEventsByKind.size === 1 ? "event" : "events"} to ${allRelays.length} relays`
-                )}
-              </button>
-            ) : (
-              <button className="btn btn-primary w-full" disabled>
-                <span className="loading loading-spinner loading-xs" />
-                Checking relays…
-              </button>
-            )}
+            <button
+              className="btn btn-primary w-full"
+              onClick={handleBroadcast}
+              disabled={broadcasting || bestEventsByKind.size === 0}
+            >
+              {broadcasting ? (
+                <>
+                  <span className="loading loading-spinner loading-xs" />
+                  Broadcasting…
+                </>
+              ) : bestEventsByKind.size === 0 ? (
+                "Nothing to broadcast"
+              ) : (
+                `Broadcast ${bestEventsByKind.size} ${bestEventsByKind.size === 1 ? "event" : "events"} to ${allRelays.length} relays`
+              )}
+            </button>
             <button
               className="btn btn-ghost btn-sm w-full"
               onClick={next}

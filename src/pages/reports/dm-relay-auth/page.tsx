@@ -1,138 +1,46 @@
-import { getRelaysFromList } from "applesauce-common/helpers/lists";
-import { mapEventsToStore } from "applesauce-core";
-import {
-  relaySet,
-  type EventTemplate,
-  type NostrEvent,
-} from "applesauce-core/helpers";
+import { useEffect, useMemo, useState } from "react";
+import type { EventTemplate } from "applesauce-core/helpers";
 import { modifyPublicTags } from "applesauce-core/operations";
 import { removeRelayTag } from "applesauce-core/operations/tag/relay";
 import { use$ } from "applesauce-react/hooks";
-import type { Relay } from "applesauce-relay";
-import { useEffect, useMemo, useState } from "react";
-import { of, timeout, timer } from "rxjs";
-import { catchError, last, map, take, takeUntil } from "rxjs/operators";
-import { useReport } from "../../context/ReportContext.tsx";
-import { factory } from "../../lib/factory.ts";
-import { DEFAULT_RELAYS, LOOKUP_RELAYS, pool } from "../../lib/relay.ts";
-import { eventStore } from "../../lib/store.ts";
+import { timer } from "rxjs";
+import { takeUntil } from "rxjs/operators";
+import { toLoaderState } from "../../../observable/operator/to-loader-state.ts";
+import { useReport } from "../../../context/ReportContext.tsx";
+import { factory } from "../../../lib/factory.ts";
+import { pool } from "../../../lib/relay.ts";
+import { eventStore } from "../../../lib/store.ts";
 import {
   AUTO_ADVANCE_MS,
   EVENT_LOAD_TIMEOUT_MS,
-  VERDICT_TIMEOUT_MS,
-} from "../../lib/timeouts.ts";
+} from "../../../lib/timeouts.ts";
+import { createLoader } from "./loader.ts";
+import type { AuthStatus } from "./loader.ts";
 
 // ---------------------------------------------------------------------------
-// Constants
+// AuthBadge — derives status display from loader state
 // ---------------------------------------------------------------------------
 
-/** ms to wait for the per-relay auth probe before treating the relay as unknown */
-const PROBE_TIMEOUT_MS = 10_000;
-
-/** Relays used to fetch the kind:10050 event */
-const FETCH_RELAYS = relaySet(LOOKUP_RELAYS, DEFAULT_RELAYS);
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** Per-relay auth probe result */
-type AuthStatus = "checking" | "protected" | "unprotected" | "unknown";
-
-// ---------------------------------------------------------------------------
-// useAuthStatus
-//
-// Probes a single relay by sending a REQ for kind:1059 p-tagged to the subject.
-// Monitors relay.authRequiredForRead$ in parallel.
-//
-// - "protected"   — relay demanded auth-required in response to our REQ
-// - "unprotected" — relay served EOSE without requiring auth
-// - "unknown"     — relay did not respond within PROBE_TIMEOUT_MS
-// ---------------------------------------------------------------------------
-
-function useAuthStatus(relay: Relay, subjectPubkey: string): AuthStatus {
-  const [status, setStatus] = useState<AuthStatus>("checking");
-
-  useEffect(() => {
-    let settled = false;
-
-    function settle(next: AuthStatus) {
-      if (settled) return;
-      settled = true;
-      setStatus(next);
-    }
-
-    // Watch authRequiredForRead$ — flips to true when relay sends CLOSED with
-    // "auth-required: ..." in response to our REQ below.
-    const authSub = relay.authRequiredForRead$.subscribe((required) => {
-      if (required) settle("protected");
-    });
-
-    // Send the probe REQ: kind:1059 p-tagged to the subject, limit 1.
-    // We use relay.req() (low-level, no auto-retry/auto-auth) so we see the
-    // raw unauthenticated relay response.
-    const reqSub = relay
-      .req({ kinds: [1059], "#p": [subjectPubkey], limit: 1 })
-      .pipe(
-        // Cap the probe at PROBE_TIMEOUT_MS
-        timeout({
-          first: PROBE_TIMEOUT_MS,
-          with: () => of("timeout" as const),
-        }),
-        // Convert any error (ReqCloseError with auth-required prefix, or
-        // connection error) into a terminal "error" signal so we can inspect
-        // the authRequiredForRead$ state after the fact.
-        catchError(() => of("error" as const)),
-        take(1),
-      )
-      .subscribe((result) => {
-        if (result === "timeout") {
-          settle("unknown");
-        } else if (result === "error") {
-          // authSub may have already flipped us to "protected" via the
-          // CLOSED message that caused this error. If not, it's unknown.
-          settle("unknown");
-        } else {
-          // result is "EOSE" or a NostrEvent — relay served without auth
-          settle("unprotected");
-        }
-      });
-
-    return () => {
-      authSub.unsubscribe();
-      reqSub.unsubscribe();
-    };
-  }, [relay, subjectPubkey]);
-
-  return status;
-}
-
-// ---------------------------------------------------------------------------
-// AuthBadge
-// ---------------------------------------------------------------------------
-
-function AuthBadge({ status }: { status: AuthStatus }) {
-  if (status === "protected") {
+function AuthBadge({ status }: { status: AuthStatus | null | undefined }) {
+  if (status === "protected")
     return (
       <span className="badge badge-success badge-sm whitespace-nowrap">
         Auth Required
       </span>
     );
-  }
-  if (status === "unprotected") {
+  if (status === "unprotected")
     return (
       <span className="badge badge-error badge-sm whitespace-nowrap">
         No Auth
       </span>
     );
-  }
-  if (status === "unknown") {
+  if (status === "unknown")
     return (
       <span className="badge badge-ghost badge-sm whitespace-nowrap">
         Unknown
       </span>
     );
-  }
+  // null or undefined = still probing
   return (
     <span className="badge badge-ghost badge-sm gap-1 whitespace-nowrap">
       <span className="loading loading-spinner loading-xs" />
@@ -142,26 +50,24 @@ function AuthBadge({ status }: { status: AuthStatus }) {
 }
 
 // ---------------------------------------------------------------------------
-// RelayRow — single DM relay with auth badge and optional checkbox
+// RelayRow — reads auth status from loader state, not from a hook
 // ---------------------------------------------------------------------------
 
 function RelayRow({
   relayUrl,
-  relay,
-  status,
+  authStatus,
   selected,
   onToggle,
 }: {
   relayUrl: string;
-  relay: Relay;
-  status: AuthStatus;
+  authStatus: AuthStatus | null | undefined;
   selected: boolean;
   onToggle: (url: string) => void;
 }) {
+  const relay = useMemo(() => pool.relay(relayUrl), [relayUrl]);
   const info = use$(relay.information$);
   const iconUrl = use$(relay.icon$);
-  const isUnprotected = status === "unprotected";
-
+  const isUnprotected = authStatus === "unprotected";
   const name = info?.name ?? relayUrl;
   const description = info?.description;
 
@@ -179,7 +85,6 @@ function RelayRow({
         .filter(Boolean)
         .join(" ")}
     >
-      {/* Checkbox — only interactive for unprotected relays */}
       {isUnprotected ? (
         <input
           type="checkbox"
@@ -190,8 +95,6 @@ function RelayRow({
       ) : (
         <div className="size-4 mt-0.5 shrink-0" />
       )}
-
-      {/* Icon */}
       {iconUrl ? (
         <img
           src={iconUrl}
@@ -206,8 +109,6 @@ function RelayRow({
           …
         </div>
       )}
-
-      {/* Text */}
       <div className="flex-1 min-w-0 flex flex-col gap-0.5">
         <span className="font-medium text-sm text-base-content truncate">
           {name}
@@ -221,223 +122,106 @@ function RelayRow({
           </p>
         )}
       </div>
-
-      {/* Badge */}
-      <AuthBadge status={status} />
+      <AuthBadge status={authStatus} />
     </label>
   );
 }
 
 // ---------------------------------------------------------------------------
-// StatusTracker — wraps RelayRow and bubbles status changes upward
-// ---------------------------------------------------------------------------
-
-function StatusTracker({
-  relayUrl,
-  relay,
-  selected,
-  subjectPubkey,
-  onToggle,
-  onStatus,
-}: {
-  relayUrl: string;
-  relay: Relay;
-  selected: boolean;
-  subjectPubkey: string;
-  onToggle: (url: string) => void;
-  onStatus: (url: string, status: AuthStatus) => void;
-}) {
-  const status = useAuthStatus(relay, subjectPubkey);
-
-  useEffect(() => {
-    onStatus(relayUrl, status);
-  }, [relayUrl, status, onStatus]);
-
-  return (
-    <RelayRow
-      relayUrl={relayUrl}
-      relay={relay}
-      status={status}
-      selected={selected}
-      onToggle={onToggle}
-    />
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main page — DmRelayAuth
+// Main page
 // ---------------------------------------------------------------------------
 
 function DmRelayAuth() {
-  const { subject: subjectUser, next, publish: publishEvent } = useReport();
+  const { subject, next, publish: publishEvent } = useReport();
 
   // -------------------------------------------------------------------------
-  // Fetch kind:10050 DM relay list
-  // Use the subject's outboxes as primary relays, fall back to FETCH_RELAYS.
-  // Resolves to null after EVENT_LOAD_TIMEOUT_MS if the event never arrives.
+  // Loader — streams DmRelayAuthState including per-relay auth probes
   // -------------------------------------------------------------------------
-
-  const outboxes = use$(() => subjectUser?.outboxes$, [subjectUser]);
-
-  const dmRelaysCast = use$(
+  const loaderState = use$(
     () =>
-      subjectUser
-        ? pool
-            .request(relaySet(outboxes, FETCH_RELAYS), {
-              authors: [subjectUser.pubkey],
-              kinds: [10050],
-              limit: 1,
-            })
-            .pipe(
-              mapEventsToStore(eventStore),
-              takeUntil(timer(EVENT_LOAD_TIMEOUT_MS)),
-              last(null, null as NostrEvent | null),
-              map((event) => (event ? getRelaysFromList(event) : null)),
-            )
+      subject
+        ? createLoader(subject).pipe(
+            takeUntil(timer(EVENT_LOAD_TIMEOUT_MS)),
+            toLoaderState(),
+          )
         : undefined,
-    [subjectUser?.pubkey, outboxes?.join(",")],
+    [subject?.pubkey],
   );
 
-  const listLoaded = dmRelaysCast !== undefined;
-  const listNotFound = dmRelaysCast === null;
+  const isLoading = !loaderState?.complete;
+  const state = loaderState?.data;
 
-  const relayList = useMemo<string[]>(() => dmRelaysCast ?? [], [dmRelaysCast]);
-
-  const relayEntries = useMemo(
-    () => relayList.map((url) => ({ url, relay: pool.relay(url) })),
-    [relayList],
+  const relayUrls = state?.relayUrls ?? null;
+  const authStatus = useMemo(
+    () => state?.authStatus ?? {},
+    [state?.authStatus],
   );
+  const relayList = useMemo<string[]>(() => relayUrls ?? [], [relayUrls]);
 
   // -------------------------------------------------------------------------
-  // Per-relay auth status tracking
+  // Derive verdicts from loader state (no React hooks needed)
   // -------------------------------------------------------------------------
-
-  const [statuses, setStatuses] = useState<Record<string, AuthStatus>>({});
-
-  const handleStatus = useMemo(
-    () => (url: string, status: AuthStatus) =>
-      setStatuses((prev) =>
-        prev[url] === status ? prev : { ...prev, [url]: status },
-      ),
-    [],
-  );
-
-  // -------------------------------------------------------------------------
-  // Derived state
-  // -------------------------------------------------------------------------
-
-  // Timeout for probe completion — after VERDICT_TIMEOUT_MS treat remaining
-  // "checking" statuses as unknown and allow proceeding.
-  const [checkTimedOut, setCheckTimedOut] = useState(false);
-  useEffect(() => {
-    if (!listLoaded || relayList.length === 0) return;
-    const timer = setTimeout(() => setCheckTimedOut(true), VERDICT_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [listLoaded, relayList.length]);
-
   const unprotectedUrls = useMemo(
-    () => relayList.filter((url) => statuses[url] === "unprotected"),
-    [relayList, statuses],
-  );
-
-  const allChecked = useMemo(
-    () =>
-      relayList.every(
-        (url) => statuses[url] !== undefined && statuses[url] !== "checking",
-      ),
-    [relayList, statuses],
+    () => relayList.filter((url) => authStatus[url] === "unprotected"),
+    [relayList, authStatus],
   );
 
   const allProtected = useMemo(
     () =>
-      listLoaded &&
-      !listNotFound &&
+      !isLoading &&
+      relayUrls !== null &&
       relayList.length > 0 &&
-      (allChecked || checkTimedOut) &&
-      unprotectedUrls.length === 0,
-    [
-      listLoaded,
-      listNotFound,
-      relayList.length,
-      allChecked,
-      checkTimedOut,
-      unprotectedUrls.length,
-    ],
+      unprotectedUrls.length === 0 &&
+      relayList.every(
+        (url) => authStatus[url] !== null && authStatus[url] !== undefined,
+      ),
+    [isLoading, relayUrls, relayList, unprotectedUrls.length, authStatus],
   );
 
-  const canProceed = allChecked || checkTimedOut;
-
   // -------------------------------------------------------------------------
-  // Checkbox selection for unprotected relays
+  // Page-local UI state — selection, publish
   // -------------------------------------------------------------------------
-
   const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  // Auto-select all unprotected relays when they are first discovered
-  useEffect(() => {
-    if (unprotectedUrls.length > 0) {
-      setSelected(new Set(unprotectedUrls));
-    }
-  }, [unprotectedUrls.length]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function handleToggle(url: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(url)) {
-        next.delete(url);
-      } else {
-        next.add(url);
-      }
-      return next;
-    });
-  }
-
-  function handleSelectAll() {
-    setSelected(new Set(unprotectedUrls));
-  }
-
-  function handleDeselectAll() {
-    setSelected(new Set());
-  }
-
-  // -------------------------------------------------------------------------
-  // Publish state
-  // -------------------------------------------------------------------------
-
   const [publishing, setPublishing] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // -------------------------------------------------------------------------
-  // Auto-advance
-  // -------------------------------------------------------------------------
+  // Auto-select unprotected relays when discovered
+  useEffect(() => {
+    if (unprotectedUrls.length > 0) setSelected(new Set(unprotectedUrls));
+  }, [unprotectedUrls.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // All relays are protected — auto-advance
+  // Auto-advance when all relays are protected
   useEffect(() => {
     if (allProtected) {
-      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => next(), AUTO_ADVANCE_MS);
+      return () => clearTimeout(t);
     }
   }, [allProtected, next]);
 
-  // Removals published — auto-advance
+  // Auto-advance after successful publish
   useEffect(() => {
     if (done) {
-      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => next(), AUTO_ADVANCE_MS);
+      return () => clearTimeout(t);
     }
   }, [done, next]);
 
-  // -------------------------------------------------------------------------
-  // Remove handler
-  // -------------------------------------------------------------------------
+  function handleToggle(url: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+  }
 
   async function handleRemoveSelected() {
-    if (!subjectUser || selected.size === 0) return;
+    if (!subject || selected.size === 0) return;
     setPublishing(true);
     setError(null);
     try {
-      const existing = eventStore.getReplaceable(10050, subjectUser.pubkey);
+      const existing = eventStore.getReplaceable(10050, subject.pubkey);
       if (!existing)
         throw new Error(
           "Could not find your DM relay list event (kind:10050).",
@@ -459,18 +243,34 @@ function DmRelayAuth() {
   }
 
   // -------------------------------------------------------------------------
-  // Loading state
+  // Loading — show partial relay rows with "checking" badges as probes stream in
   // -------------------------------------------------------------------------
-
-  if (!listLoaded) {
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6 items-center">
-            <span className="loading loading-spinner loading-lg text-primary" />
-            <p className="text-sm text-base-content/60">
-              Loading your DM relay list…
-            </p>
+          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
+            <div className="flex items-center gap-4">
+              <span className="loading loading-spinner loading-lg text-primary shrink-0" />
+              <p className="text-sm text-base-content/60">
+                {relayList.length > 0
+                  ? `Probing ${relayList.length} DM relay${relayList.length === 1 ? "" : "s"}…`
+                  : "Loading your DM relay list…"}
+              </p>
+            </div>
+            {relayList.length > 0 && (
+              <div className="flex flex-col gap-3">
+                {relayList.map((url) => (
+                  <RelayRow
+                    key={url}
+                    relayUrl={url}
+                    authStatus={authStatus[url]}
+                    selected={selected.has(url)}
+                    onToggle={handleToggle}
+                  />
+                ))}
+              </div>
+            )}
             <button className="btn btn-ghost btn-sm" onClick={next}>
               Skip
             </button>
@@ -480,11 +280,8 @@ function DmRelayAuth() {
     );
   }
 
-  // -------------------------------------------------------------------------
-  // Not found — kind:10050 timed out or does not exist
-  // -------------------------------------------------------------------------
-
-  if (listNotFound) {
+  // Not found
+  if (relayUrls === null) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
@@ -511,10 +308,7 @@ function DmRelayAuth() {
     );
   }
 
-  // -------------------------------------------------------------------------
-  // Empty list — kind:10050 exists but has no relays
-  // -------------------------------------------------------------------------
-
+  // Empty list
   if (relayList.length === 0) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
@@ -540,10 +334,7 @@ function DmRelayAuth() {
     );
   }
 
-  // -------------------------------------------------------------------------
-  // All-clear — every relay requires auth (auto-advancing)
-  // -------------------------------------------------------------------------
-
+  // All protected (auto-advancing)
   if (allProtected) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
@@ -585,10 +376,7 @@ function DmRelayAuth() {
     );
   }
 
-  // -------------------------------------------------------------------------
-  // Done — removals published (auto-advancing)
-  // -------------------------------------------------------------------------
-
+  // Done (auto-advancing)
   if (done) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
@@ -624,15 +412,11 @@ function DmRelayAuth() {
     );
   }
 
-  // -------------------------------------------------------------------------
   // Main view
-  // -------------------------------------------------------------------------
-
   return (
     <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
-          {/* Header */}
           <div>
             <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
               DM Relays
@@ -647,43 +431,37 @@ function DmRelayAuth() {
             </p>
           </div>
 
-          {/* Relay list */}
           <div className="flex flex-col gap-3">
-            {subjectUser &&
-              relayEntries.map(({ url, relay }) => (
-                <StatusTracker
-                  key={url}
-                  relayUrl={url}
-                  relay={relay}
-                  selected={selected.has(url)}
-                  subjectPubkey={subjectUser.pubkey}
-                  onToggle={handleToggle}
-                  onStatus={handleStatus}
-                />
-              ))}
+            {relayList.map((url) => (
+              <RelayRow
+                key={url}
+                relayUrl={url}
+                authStatus={authStatus[url]}
+                selected={selected.has(url)}
+                onToggle={handleToggle}
+              />
+            ))}
           </div>
 
-          {/* Unprotected callout with select-all controls */}
           {unprotectedUrls.length > 0 && (
             <div className="bg-warning/10 border border-warning/30 rounded-xl p-3 flex flex-col gap-2">
               <p className="text-sm text-warning">
                 {unprotectedUrls.length}{" "}
                 {unprotectedUrls.length === 1 ? "relay does" : "relays do"} not
                 require authentication to read gift wraps. Anyone can query
-                these relays for your encrypted messages. Consider removing them
-                and replacing with auth-protected relays.
+                these relays for your encrypted messages.
               </p>
               <div className="flex gap-2">
                 <button
                   className="btn btn-ghost btn-xs"
-                  onClick={handleSelectAll}
+                  onClick={() => setSelected(new Set(unprotectedUrls))}
                   disabled={selected.size === unprotectedUrls.length}
                 >
                   Select all
                 </button>
                 <button
                   className="btn btn-ghost btn-xs"
-                  onClick={handleDeselectAll}
+                  onClick={() => setSelected(new Set())}
                   disabled={selected.size === 0}
                 >
                   Deselect all
@@ -692,14 +470,12 @@ function DmRelayAuth() {
             </div>
           )}
 
-          {/* Error */}
           {error && (
             <div className="bg-error/10 border border-error/30 rounded-xl p-3 text-xs text-error">
               {error}
             </div>
           )}
 
-          {/* Actions */}
           <div className="flex flex-col gap-2">
             {unprotectedUrls.length > 0 && (
               <button
@@ -719,19 +495,10 @@ function DmRelayAuth() {
             <button
               className="btn btn-primary w-full"
               onClick={next}
-              disabled={!canProceed || publishing}
+              disabled={publishing}
             >
-              {canProceed ? "Next" : "Checking…"}
+              Next
             </button>
-            {!canProceed && (
-              <button
-                className="btn btn-ghost btn-sm w-full"
-                onClick={next}
-                disabled={publishing}
-              >
-                Skip
-              </button>
-            )}
           </div>
         </div>
       </div>

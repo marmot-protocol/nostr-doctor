@@ -9,27 +9,27 @@ import type { PageDefinition as ReportPageDefinition } from "../context/ReportCo
 const REPORTS: ReportPageDefinition[] = [
   {
     name: "profile-metadata",
-    Component: lazy(() => import("./reports/profile-metadata.tsx")),
+    Component: lazy(() => import("./reports/profile-metadata/page.tsx")),
   },
   {
     name: "dead-relays",
-    Component: lazy(() => import("./reports/dead-relays.tsx")),
+    Component: lazy(() => import("./reports/dead-relays/page.tsx")),
   },
   {
     name: "dm-relay-auth",
-    Component: lazy(() => import("./reports/dm-relay-auth.tsx")),
+    Component: lazy(() => import("./reports/dm-relay-auth/page.tsx")),
   },
   {
     name: "follow-list-relays",
-    Component: lazy(() => import("./reports/follow-list-relays.tsx")),
+    Component: lazy(() => import("./reports/follow-list-relays/page.tsx")),
   },
   {
     name: "metadata-broadcast",
-    Component: lazy(() => import("./reports/metadata-broadcast.tsx")),
+    Component: lazy(() => import("./reports/metadata-broadcast/page.tsx")),
   },
   {
     name: "search-relay-nip50",
-    Component: lazy(() => import("./reports/search-relay-nip50.tsx")),
+    Component: lazy(() => import("./reports/search-relay-nip50/page.tsx")),
   },
 ];
 

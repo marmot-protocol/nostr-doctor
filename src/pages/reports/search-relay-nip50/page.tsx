@@ -1,52 +1,40 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Relay } from "applesauce-relay";
 import { modifyPublicTags } from "applesauce-core/operations";
 import { removeRelayTag } from "applesauce-core/operations/tag/relay";
-import { of, timeout } from "rxjs";
 import { use$ } from "applesauce-react/hooks";
-import { useReport } from "../../context/ReportContext.tsx";
-import { eventStore } from "../../lib/store.ts";
-import { factory } from "../../lib/factory.ts";
-import { pool } from "../../lib/relay.ts";
+import { timer } from "rxjs";
+import { takeUntil } from "rxjs/operators";
+import { toLoaderState } from "../../../observable/operator/to-loader-state.ts";
+import { useReport } from "../../../context/ReportContext.tsx";
+import { eventStore } from "../../../lib/store.ts";
+import { factory } from "../../../lib/factory.ts";
+import { pool } from "../../../lib/relay.ts";
 import {
   AUTO_ADVANCE_MS,
   EVENT_LOAD_TIMEOUT_MS,
-  VERDICT_TIMEOUT_MS,
-} from "../../lib/timeouts.ts";
+} from "../../../lib/timeouts.ts";
+import { createLoader } from "./loader.ts";
 
 // ---------------------------------------------------------------------------
-// NIP-50 support check status per relay
+// Nip50Badge — derives status directly from the NIP-11 supported array
 // ---------------------------------------------------------------------------
 
 type Nip50Status = "checking" | "supported" | "unsupported" | "unknown";
 
-// ---------------------------------------------------------------------------
-// useNip50Status — subscribes to a relay's supported$ and derives NIP-50 verdict
-// ---------------------------------------------------------------------------
-
-function useNip50Status(relay: Relay): Nip50Status {
-  const supported = use$(relay.supported$);
-
-  if (supported === undefined) return "checking";
-  if (supported === null) return "unknown";
+function nip50StatusFrom(supported: number[] | null | undefined): Nip50Status {
+  if (supported === undefined) return "checking"; // loader still in progress
+  if (supported === null) return "unknown"; // fetch failed
   if (supported.includes(50)) return "supported";
   return "unsupported";
 }
 
-// ---------------------------------------------------------------------------
-// Nip50Badge — visual indicator for a relay's NIP-50 support
-// ---------------------------------------------------------------------------
-
 function Nip50Badge({ status }: { status: Nip50Status }) {
-  if (status === "supported") {
+  if (status === "supported")
     return <span className="badge badge-success badge-sm">NIP-50</span>;
-  }
-  if (status === "unsupported") {
+  if (status === "unsupported")
     return <span className="badge badge-error badge-sm">No NIP-50</span>;
-  }
-  if (status === "unknown") {
+  if (status === "unknown")
     return <span className="badge badge-ghost badge-sm">Unknown</span>;
-  }
   return (
     <span className="badge badge-ghost badge-sm gap-1">
       <span className="loading loading-spinner loading-xs" />
@@ -56,43 +44,41 @@ function Nip50Badge({ status }: { status: Nip50Status }) {
 }
 
 // ---------------------------------------------------------------------------
-// RelayRow — one search relay with NIP-50 check and selection checkbox
+// RelayRow — reads NIP-11 status from loader state, not from a hook
 // ---------------------------------------------------------------------------
 
 function RelayRow({
   relayUrl,
-  relay,
+  supported,
   selected,
   onToggle,
 }: {
   relayUrl: string;
-  relay: Relay;
+  supported: number[] | null | undefined;
   selected: boolean;
   onToggle: (url: string) => void;
 }) {
-  const status = useNip50Status(relay);
+  const relay = useMemo(() => pool.relay(relayUrl), [relayUrl]);
+  const status = nip50StatusFrom(supported);
   const info = use$(relay.information$);
   const iconUrl = use$(relay.icon$);
   const isUnsupported = status === "unsupported";
-
   const name = info?.name ?? relayUrl;
   const description = info?.description;
 
   return (
     <label
       className={[
-        "rounded-xl border p-4 flex items-start gap-3 cursor-pointer transition-colors select-none",
+        "rounded-xl border p-4 flex items-start gap-3 transition-colors select-none",
         isUnsupported
           ? selected
-            ? "border-error/60 bg-error/10"
-            : "border-error/30 bg-error/5"
-          : "border-base-200",
-        !isUnsupported && "cursor-default",
+            ? "border-error/60 bg-error/10 cursor-pointer"
+            : "border-error/30 bg-error/5 cursor-pointer"
+          : "border-base-200 cursor-default",
       ]
         .filter(Boolean)
         .join(" ")}
     >
-      {/* Checkbox — only interactive for unsupported relays */}
       {isUnsupported ? (
         <input
           type="checkbox"
@@ -103,8 +89,6 @@ function RelayRow({
       ) : (
         <div className="size-4 mt-0.5 shrink-0" />
       )}
-
-      {/* Icon */}
       {iconUrl ? (
         <img
           src={iconUrl}
@@ -119,8 +103,6 @@ function RelayRow({
           …
         </div>
       )}
-
-      {/* Text */}
       <div className="flex-1 min-w-0 flex flex-col gap-0.5">
         <span className="font-medium text-sm text-base-content truncate">
           {name}
@@ -134,43 +116,8 @@ function RelayRow({
           </p>
         )}
       </div>
-
-      {/* Badge */}
       <Nip50Badge status={status} />
     </label>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// StatusTracker — wrapper that reports NIP-50 status changes upward
-// ---------------------------------------------------------------------------
-
-function StatusTracker({
-  relayUrl,
-  relay,
-  selected,
-  onToggle,
-  onStatus,
-}: {
-  relayUrl: string;
-  relay: Relay;
-  selected: boolean;
-  onToggle: (url: string) => void;
-  onStatus: (url: string, status: Nip50Status) => void;
-}) {
-  const status = useNip50Status(relay);
-
-  useEffect(() => {
-    onStatus(relayUrl, status);
-  }, [relayUrl, status, onStatus]);
-
-  return (
-    <RelayRow
-      relayUrl={relayUrl}
-      relay={relay}
-      selected={selected}
-      onToggle={onToggle}
-    />
   );
 }
 
@@ -179,139 +126,92 @@ function StatusTracker({
 // ---------------------------------------------------------------------------
 
 function SearchRelayNip50Report() {
-  const { subject: subjectUser, next, publish: publishEvent } = useReport();
+  const { subject, next, publish: publishEvent } = useReport();
 
-  // Load the user's kind:10007 search relay list.
-  // Resolves to null after timeout if the event never arrives.
-  const searchRelaysCast = use$(
+  // -------------------------------------------------------------------------
+  // Loader — streams SearchRelayNip50State including per-relay NIP-11 data
+  // -------------------------------------------------------------------------
+  const loaderState = use$(
     () =>
-      subjectUser
-        ? subjectUser.searchRelays$.pipe(
-            timeout({
-              first: EVENT_LOAD_TIMEOUT_MS,
-              with: () => of(null),
-            }),
+      subject
+        ? createLoader(subject).pipe(
+            takeUntil(timer(EVENT_LOAD_TIMEOUT_MS)),
+            toLoaderState(),
           )
         : undefined,
-    [subjectUser?.pubkey],
+    [subject?.pubkey],
   );
 
-  // Relay URLs from the cast (empty array if event found but has no relays)
-  const relayList = useMemo<string[]>(
-    () => searchRelaysCast?.relays ?? [],
-    [searchRelaysCast],
-  );
+  const isLoading = !loaderState?.complete;
+  const state = loaderState?.data;
 
-  // Pool relay instances for NIP-11 info
-  const relayEntries = useMemo(
-    () => relayList.map((url) => ({ url, relay: pool.relay(url) })),
-    [relayList],
-  );
+  const relayUrls = state?.relayUrls ?? null;
+  const nip11 = useMemo(() => state?.nip11 ?? {}, [state?.nip11]);
+  const relayList = useMemo<string[]>(() => relayUrls ?? [], [relayUrls]);
 
-  // Track NIP-50 check statuses per URL
-  const [statuses, setStatuses] = useState<Record<string, Nip50Status>>({});
-
-  // Track which unsupported relays the user has selected for removal
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  // Track publish state
-  const [publishing, setPublishing] = useState(false);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Timeout for NIP-11 checks — after 15s treat remaining "checking" as "unknown"
-  const [checkTimedOut, setCheckTimedOut] = useState(false);
-  const listLoaded = searchRelaysCast !== undefined;
-  useEffect(() => {
-    if (!listLoaded || relayList.length === 0) return;
-    const timer = setTimeout(() => setCheckTimedOut(true), VERDICT_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [listLoaded, relayList.length]);
-
-  // Derived state
-  const listNotFound = searchRelaysCast === null;
-
+  // -------------------------------------------------------------------------
+  // Derive verdicts from loader state (no React hooks needed)
+  // -------------------------------------------------------------------------
   const unsupportedUrls = useMemo(
-    () => relayList.filter((url) => statuses[url] === "unsupported"),
-    [relayList, statuses],
-  );
-
-  const allChecked = useMemo(
     () =>
-      relayList.every(
-        (url) => statuses[url] !== undefined && statuses[url] !== "checking",
-      ),
-    [relayList, statuses],
+      relayList.filter((url) => nip50StatusFrom(nip11[url]) === "unsupported"),
+    [relayList, nip11],
   );
 
   const allSupported = useMemo(
     () =>
-      listLoaded &&
-      !listNotFound &&
+      !isLoading &&
+      relayUrls !== null &&
       relayList.length > 0 &&
-      (allChecked || checkTimedOut) &&
-      unsupportedUrls.length === 0,
-    [
-      listLoaded,
-      listNotFound,
-      relayList.length,
-      allChecked,
-      checkTimedOut,
-      unsupportedUrls.length,
-    ],
+      unsupportedUrls.length === 0 &&
+      relayList.every((url) => nip50StatusFrom(nip11[url]) !== "checking"),
+    [isLoading, relayUrls, relayList, unsupportedUrls.length, nip11],
   );
 
-  const canProceed = allChecked || checkTimedOut;
+  // -------------------------------------------------------------------------
+  // Page-local UI state — selection, publish
+  // -------------------------------------------------------------------------
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [publishing, setPublishing] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Auto-select all unsupported relays when they are discovered
+  // Auto-select unsupported relays when first discovered
   useEffect(() => {
-    if (unsupportedUrls.length > 0) {
-      setSelected(new Set(unsupportedUrls));
-    }
+    if (unsupportedUrls.length > 0) setSelected(new Set(unsupportedUrls));
   }, [unsupportedUrls.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-advance when all relays support NIP-50
   useEffect(() => {
     if (allSupported) {
-      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => next(), AUTO_ADVANCE_MS);
+      return () => clearTimeout(t);
     }
   }, [allSupported, next]);
 
   // Auto-advance after successful removal
   useEffect(() => {
     if (done) {
-      const timer = setTimeout(() => next(), AUTO_ADVANCE_MS);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => next(), AUTO_ADVANCE_MS);
+      return () => clearTimeout(t);
     }
   }, [done, next]);
 
   function handleToggle(url: string) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(url)) {
-        next.delete(url);
-      } else {
-        next.add(url);
-      }
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
       return next;
     });
   }
 
-  function handleSelectAll() {
-    setSelected(new Set(unsupportedUrls));
-  }
-
-  function handleDeselectAll() {
-    setSelected(new Set());
-  }
-
   async function handleRemoveSelected() {
-    if (!subjectUser || selected.size === 0) return;
+    if (!subject || selected.size === 0) return;
     setPublishing(true);
     setError(null);
     try {
-      const existing = eventStore.getReplaceable(10007, subjectUser.pubkey);
+      const existing = eventStore.getReplaceable(10007, subject.pubkey);
       if (!existing)
         throw new Error("Could not find your search relay list event.");
       const tagOps = [...selected].map((url) => removeRelayTag(url));
@@ -327,18 +227,35 @@ function SearchRelayNip50Report() {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Loading state
-  // ---------------------------------------------------------------------------
-  if (!listLoaded) {
+  // -------------------------------------------------------------------------
+  // Loading — show partial relay rows with "checking" badges as they stream in
+  // -------------------------------------------------------------------------
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6 items-center">
-            <span className="loading loading-spinner loading-lg text-primary" />
-            <p className="text-sm text-base-content/60">
-              Loading your search relay list…
-            </p>
+          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
+            <div className="flex items-center gap-4">
+              <span className="loading loading-spinner loading-lg text-primary shrink-0" />
+              <p className="text-sm text-base-content/60">
+                {relayList.length > 0
+                  ? `Checking ${relayList.length} relay${relayList.length === 1 ? "" : "s"}…`
+                  : "Loading your search relay list…"}
+              </p>
+            </div>
+            {relayList.length > 0 && (
+              <div className="flex flex-col gap-3">
+                {relayList.map((url) => (
+                  <RelayRow
+                    key={url}
+                    relayUrl={url}
+                    supported={nip11[url]}
+                    selected={selected.has(url)}
+                    onToggle={handleToggle}
+                  />
+                ))}
+              </div>
+            )}
             <button className="btn btn-ghost btn-sm" onClick={next}>
               Skip
             </button>
@@ -348,10 +265,8 @@ function SearchRelayNip50Report() {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Not found — kind:10007 event timed out or does not exist
-  // ---------------------------------------------------------------------------
-  if (listNotFound) {
+  // Not found
+  if (relayUrls === null) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
@@ -366,7 +281,7 @@ function SearchRelayNip50Report() {
             </div>
             <div className="bg-warning/10 border border-warning/30 rounded-xl p-4 text-sm text-warning">
               No NIP-51 search relay list (kind:10007) could be found for this
-              account. You may not have set one up yet.
+              account.
             </div>
             <button className="btn btn-outline btn-sm w-full" onClick={next}>
               Next
@@ -377,9 +292,7 @@ function SearchRelayNip50Report() {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Empty list — event exists but has no relays
-  // ---------------------------------------------------------------------------
+  // Empty list
   if (relayList.length === 0) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
@@ -405,9 +318,7 @@ function SearchRelayNip50Report() {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // All-clear — every relay supports NIP-50 (auto-advancing)
-  // ---------------------------------------------------------------------------
+  // All-clear (auto-advancing)
   if (allSupported) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
@@ -448,9 +359,7 @@ function SearchRelayNip50Report() {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Done — removals published (auto-advancing)
-  // ---------------------------------------------------------------------------
+  // Done (auto-advancing)
   if (done) {
     return (
       <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
@@ -486,14 +395,11 @@ function SearchRelayNip50Report() {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Main view
-  // ---------------------------------------------------------------------------
+  // Main report view
   return (
     <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
-          {/* Header */}
           <div>
             <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
               Search Relays
@@ -507,25 +413,18 @@ function SearchRelayNip50Report() {
             </p>
           </div>
 
-          {/* Relay list */}
           <div className="flex flex-col gap-3">
-            {relayEntries.map(({ url, relay }) => (
-              <StatusTracker
+            {relayList.map((url) => (
+              <RelayRow
                 key={url}
                 relayUrl={url}
-                relay={relay}
+                supported={nip11[url]}
                 selected={selected.has(url)}
                 onToggle={handleToggle}
-                onStatus={(u, s) =>
-                  setStatuses((prev) =>
-                    prev[u] === s ? prev : { ...prev, [u]: s },
-                  )
-                }
               />
             ))}
           </div>
 
-          {/* Unsupported callout with select-all controls */}
           {unsupportedUrls.length > 0 && (
             <div className="bg-warning/10 border border-warning/30 rounded-xl p-3 flex flex-col gap-2">
               <p className="text-sm text-warning">
@@ -536,14 +435,14 @@ function SearchRelayNip50Report() {
               <div className="flex gap-2">
                 <button
                   className="btn btn-ghost btn-xs"
-                  onClick={handleSelectAll}
+                  onClick={() => setSelected(new Set(unsupportedUrls))}
                   disabled={selected.size === unsupportedUrls.length}
                 >
                   Select all
                 </button>
                 <button
                   className="btn btn-ghost btn-xs"
-                  onClick={handleDeselectAll}
+                  onClick={() => setSelected(new Set())}
                   disabled={selected.size === 0}
                 >
                   Deselect all
@@ -552,14 +451,12 @@ function SearchRelayNip50Report() {
             </div>
           )}
 
-          {/* Error */}
           {error && (
             <div className="bg-error/10 border border-error/30 rounded-xl p-3 text-xs text-error">
               {error}
             </div>
           )}
 
-          {/* Actions */}
           <div className="flex flex-col gap-2">
             {unsupportedUrls.length > 0 && (
               <button
@@ -579,19 +476,10 @@ function SearchRelayNip50Report() {
             <button
               className="btn btn-primary w-full"
               onClick={next}
-              disabled={!canProceed || publishing}
+              disabled={publishing}
             >
-              {canProceed ? "Next" : "Checking…"}
+              Next
             </button>
-            {!canProceed && (
-              <button
-                className="btn btn-ghost btn-sm w-full"
-                onClick={next}
-                disabled={publishing}
-              >
-                Skip
-              </button>
-            )}
           </div>
         </div>
       </div>
