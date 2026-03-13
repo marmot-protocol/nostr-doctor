@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import type { EventTemplate } from "applesauce-core/helpers";
 import {
   removeInboxRelay,
@@ -6,55 +7,20 @@ import {
 import { removeRelayTag } from "applesauce-core/operations/tag/relay";
 import { modifyPublicTags } from "applesauce-core/operations/tags";
 import { use$ } from "applesauce-react/hooks";
-import { useEffect, useMemo, useState } from "react";
 import { factory } from "../../../lib/factory.ts";
 import { pool } from "../../../lib/relay.ts";
 import { eventStore } from "../../../lib/store.ts";
 import type { SectionProps } from "../accordion-types.ts";
 import type {
+  AuthStatus,
   DeadRelaysState,
   Nip65RelayListState,
+  RelayEntry,
   RelayListState,
   RelayMarker,
+  SearchSupport,
 } from "./loader.ts";
-import type { RelayVerdict } from "../../../lib/relay-monitors";
-
-// ---------------------------------------------------------------------------
-// Shared types used in the page layer
-// ---------------------------------------------------------------------------
-
-type Nip65ListStep = {
-  kind: "nip65";
-  label: string;
-  eventKind: 10002;
-  urls: string[];
-  markers: Record<string, RelayMarker>;
-  verdicts: Record<string, RelayVerdict | null>;
-};
-
-type SimpleListStep = {
-  kind: "favorite-relays" | "search-relays" | "dm-relays" | "blocked-relays" | "key-package-relays";
-  label: string;
-  eventKind: number;
-  urls: string[];
-  verdicts: Record<string, RelayVerdict | null>;
-};
-
-// ---------------------------------------------------------------------------
-// MarkerPill — read / write / both badge for NIP-65 relays
-// ---------------------------------------------------------------------------
-
-function MarkerPill({ marker }: { marker: RelayMarker }) {
-  if (marker === "both") {
-    return (
-      <span className="badge badge-ghost badge-xs font-mono">read+write</span>
-    );
-  }
-  if (marker === "read") {
-    return <span className="badge badge-ghost badge-xs font-mono">read</span>;
-  }
-  return <span className="badge badge-ghost badge-xs font-mono">write</span>;
-}
+import type { RelayVerdict } from "../../../lib/relay-monitors.ts";
 
 // ---------------------------------------------------------------------------
 // VerdictBadge
@@ -68,13 +34,13 @@ function VerdictBadge({
   isChecking: boolean;
 }) {
   if (verdict === "offline")
-    return <span className="badge badge-error badge-sm">offline</span>;
+    return <span className="badge badge-error badge-xs">offline</span>;
   if (verdict === "online")
-    return <span className="badge badge-success badge-sm">online</span>;
+    return <span className="badge badge-success badge-xs">online</span>;
   if (!isChecking)
-    return <span className="badge badge-ghost badge-sm">unknown</span>;
+    return <span className="badge badge-ghost badge-xs">unknown</span>;
   return (
-    <span className="badge badge-ghost badge-sm gap-1">
+    <span className="badge badge-ghost badge-xs gap-1">
       <span className="loading loading-spinner loading-xs" />
       checking
     </span>
@@ -82,76 +48,135 @@ function VerdictBadge({
 }
 
 // ---------------------------------------------------------------------------
-// RelayRow — shared for all list types, optional marker pill
+// SearchBadge
+// ---------------------------------------------------------------------------
+
+function SearchBadge({ status }: { status: SearchSupport }) {
+  if (status === "supported")
+    return <span className="badge badge-success badge-xs whitespace-nowrap">NIP-50 ✓</span>;
+  if (status === "unsupported")
+    return <span className="badge badge-warning badge-xs whitespace-nowrap">no search</span>;
+  if (status === "unknown")
+    return <span className="badge badge-ghost badge-xs whitespace-nowrap">search?</span>;
+  return (
+    <span className="badge badge-ghost badge-xs gap-1 whitespace-nowrap">
+      <span className="loading loading-spinner loading-xs" />
+      search
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AuthBadge
+// ---------------------------------------------------------------------------
+
+function AuthBadge({ status }: { status: AuthStatus }) {
+  if (status === "protected")
+    return <span className="badge badge-success badge-xs whitespace-nowrap">auth ✓</span>;
+  if (status === "unprotected")
+    return <span className="badge badge-error badge-xs whitespace-nowrap">no auth</span>;
+  if (status === "unknown")
+    return <span className="badge badge-ghost badge-xs whitespace-nowrap">auth?</span>;
+  return (
+    <span className="badge badge-ghost badge-xs gap-1 whitespace-nowrap">
+      <span className="loading loading-spinner loading-xs" />
+      auth
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MarkerPill
+// ---------------------------------------------------------------------------
+
+function MarkerPill({ marker }: { marker: RelayMarker }) {
+  const label = marker === "both" ? "r+w" : marker === "read" ? "read" : "write";
+  return <span className="badge badge-ghost badge-xs font-mono">{label}</span>;
+}
+
+// ---------------------------------------------------------------------------
+// RelayRow
 // ---------------------------------------------------------------------------
 
 function RelayRow({
-  relayUrl,
-  verdict,
-  isChecking,
+  entry,
   marker,
+  isChecking,
+  showSearch,
+  showAuth,
+  pendingRemove,
+  removedUrls,
   onRemove,
-  removing,
 }: {
-  relayUrl: string;
-  verdict: RelayVerdict | null | undefined;
-  isChecking: boolean;
+  entry: RelayEntry;
   marker?: RelayMarker;
+  isChecking: boolean;
+  showSearch?: boolean;
+  showAuth?: boolean;
+  pendingRemove: boolean;
+  removedUrls: Set<string>;
   onRemove: (url: string) => void;
-  removing: boolean;
 }) {
-  const relay = useMemo(() => pool.relay(relayUrl), [relayUrl]);
+  const relay = useMemo(() => pool.relay(entry.url), [entry.url]);
   const info = use$(relay.information$);
   const iconUrl = use$(relay.icon$);
-  const isOffline = verdict === "offline";
-  const name = info?.name ?? relayUrl;
+  const isOffline = entry.verdict === "offline";
+  const isRemoved = removedUrls.has(entry.url);
+  const name = info?.name ?? entry.url;
 
   return (
     <div
       className={[
-        "flex items-center gap-2 py-2 min-w-0",
-        isOffline ? "border-l-2 border-error pl-2 -ml-0.5" : "",
+        "flex items-center gap-2 py-2 min-w-0 transition-opacity duration-200",
+        isOffline && !isRemoved ? "border-l-2 border-error pl-2 -ml-0.5" : "",
+        isRemoved ? "opacity-40" : "",
       ]
         .filter(Boolean)
         .join(" ")}
     >
+      {/* Icon + name */}
       <div className="flex-1 min-w-0 flex items-center gap-2">
         {iconUrl ? (
-          <img
-            src={iconUrl}
-            alt=""
-            className="size-6 rounded shrink-0 object-cover bg-base-200"
-          />
+          <img src={iconUrl} alt="" className="size-6 rounded shrink-0 object-cover bg-base-200" />
         ) : (
-          <div
-            className="size-6 rounded shrink-0 bg-base-200 flex items-center justify-center text-base-content/40 text-[10px] font-mono"
-            aria-hidden
-          >
-            …
-          </div>
+          <div className="size-6 rounded shrink-0 bg-base-200 flex items-center justify-center text-base-content/40 text-[10px] font-mono" aria-hidden>…</div>
         )}
         <div className="min-w-0 flex flex-col gap-0">
           <span className="font-medium text-sm text-base-content truncate leading-tight">
             {name}
           </span>
           <span className="font-mono text-[11px] text-base-content/50 truncate">
-            {relayUrl}
+            {entry.url}
           </span>
         </div>
       </div>
-      {marker && <MarkerPill marker={marker} />}
-      <VerdictBadge verdict={verdict} isChecking={isChecking} />
-      {isOffline && (
+
+      {/* Badges */}
+      <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+        {marker && <MarkerPill marker={marker} />}
+        {showSearch && (
+          <SearchBadge status={entry.capabilities.searchSupport ?? null} />
+        )}
+        {showAuth && (
+          <AuthBadge status={entry.capabilities.authStatus ?? null} />
+        )}
+        <VerdictBadge verdict={entry.verdict} isChecking={isChecking} />
+      </div>
+
+      {/* Remove / trash button */}
+      {isRemoved ? (
+        <span className="badge badge-warning badge-xs shrink-0">queued</span>
+      ) : (
         <button
-          className="btn btn-error btn-xs shrink-0"
-          onClick={() => onRemove(relayUrl)}
-          disabled={removing}
+          className="btn btn-ghost btn-xs text-base-content/30 hover:text-error hover:bg-error/10 shrink-0"
+          onClick={() => onRemove(entry.url)}
+          disabled={pendingRemove}
+          aria-label={`Queue removal of ${entry.url}`}
+          title="Remove from list"
         >
-          {removing ? (
-            <span className="loading loading-spinner loading-xs" />
-          ) : (
-            "Remove"
-          )}
+          <svg className="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
         </button>
       )}
     </div>
@@ -159,303 +184,153 @@ function RelayRow({
 }
 
 // ---------------------------------------------------------------------------
-// Nip65Section — the combined read/write relay list
+// ListSection — generic renderer for any relay list
 // ---------------------------------------------------------------------------
 
-function Nip65Section({
-  step,
-  subjectPubkey,
-  publish,
-  isChecking,
-}: {
-  step: Nip65ListStep;
-  subjectPubkey: string;
-  publish: (template: EventTemplate) => Promise<void>;
-  isChecking: boolean;
-}) {
-  const [removing, setRemoving] = useState<Set<string>>(new Set());
-  const [removed, setRemoved] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-
-  const relayList = useMemo(
-    () => step.urls.filter((url) => !removed.has(url)),
-    [step.urls, removed],
-  );
-  const loadedCount = useMemo(
-    () => relayList.filter((url) => step.verdicts[url] !== null).length,
-    [relayList, step.verdicts],
-  );
-  const allDone = removed.size > 0 && relayList.length === 0;
-
-  async function handleRemove(relayUrl: string) {
-    setRemoving((prev) => new Set(prev).add(relayUrl));
-    setError(null);
-    try {
-      const existing = eventStore.getReplaceable(10002, subjectPubkey);
-      if (!existing)
-        throw new Error("Could not find your relay list (kind:10002).");
-      const marker = step.markers[relayUrl];
-      let draft: EventTemplate;
-      // Remove from both read and write sides to fully excise the relay
-      if (marker === "both") {
-        const afterWrite = await factory.modify(
-          existing,
-          removeOutboxRelay(relayUrl),
-        );
-        draft = await factory.modify(afterWrite, removeInboxRelay(relayUrl));
-      } else if (marker === "write") {
-        draft = await factory.modify(existing, removeOutboxRelay(relayUrl));
-      } else {
-        draft = await factory.modify(existing, removeInboxRelay(relayUrl));
-      }
-      await publish(draft);
-      setRemoved((prev) => new Set(prev).add(relayUrl));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to remove relay.");
-    } finally {
-      setRemoving((prev) => {
-        const n = new Set(prev);
-        n.delete(relayUrl);
-        return n;
-      });
-    }
-  }
-
-  const total = relayList.length;
-  if (total === 0 && removed.size === 0) return null;
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex justify-between items-center gap-2">
-        <span className="text-sm font-medium text-base-content">
-          {step.label}
-        </span>
-        <span className="text-xs text-base-content/50 tabular-nums shrink-0">
-          {total === 0 ? "cleaned" : `${loadedCount} / ${total}`}
-        </span>
-      </div>
-      {total > 0 && (
-        <progress
-          className="progress progress-primary w-full h-1"
-          value={loadedCount}
-          max={total}
-        />
-      )}
-      {allDone && (
-        <p className="text-xs text-success">All dead relays removed.</p>
-      )}
-      {!allDone && total > 0 && (
-        <div className="flex flex-col gap-0">
-          {relayList.map((url) => (
-            <RelayRow
-              key={url}
-              relayUrl={url}
-              verdict={step.verdicts[url]}
-              isChecking={isChecking}
-              marker={step.markers[url]}
-              onRemove={handleRemove}
-              removing={removing.has(url)}
-            />
-          ))}
-        </div>
-      )}
-      {error && <p className="text-xs text-error">{error}</p>}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// SimpleListSection — for favorite/search/DM/blocked relay lists
-// ---------------------------------------------------------------------------
-
-function SimpleListSection({
-  step,
-  subjectPubkey,
-  publish,
-  isChecking,
-}: {
-  step: SimpleListStep;
-  subjectPubkey: string;
-  publish: (template: EventTemplate) => Promise<void>;
-  isChecking: boolean;
-}) {
-  const [removing, setRemoving] = useState<Set<string>>(new Set());
-  const [removed, setRemoved] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-
-  const relayList = useMemo(
-    () => step.urls.filter((url) => !removed.has(url)),
-    [step.urls, removed],
-  );
-  const loadedCount = useMemo(
-    () => relayList.filter((url) => step.verdicts[url] !== null).length,
-    [relayList, step.verdicts],
-  );
-  const allDone = removed.size > 0 && relayList.length === 0;
-
-  async function handleRemove(relayUrl: string) {
-    setRemoving((prev) => new Set(prev).add(relayUrl));
-    setError(null);
-    try {
-      const existing = eventStore.getReplaceable(step.eventKind, subjectPubkey);
-      if (!existing)
-        throw new Error(
-          `Could not find the relay list event (kind:${step.eventKind}).`,
-        );
-      const draft = await factory.modify(
-        existing,
-        modifyPublicTags(removeRelayTag(relayUrl)),
-      );
-      await publish(draft);
-      setRemoved((prev) => new Set(prev).add(relayUrl));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to remove relay.");
-    } finally {
-      setRemoving((prev) => {
-        const n = new Set(prev);
-        n.delete(relayUrl);
-        return n;
-      });
-    }
-  }
-
-  const total = relayList.length;
-  if (total === 0 && removed.size === 0) return null;
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex justify-between items-center gap-2">
-        <span className="text-sm font-medium text-base-content">
-          {step.label}
-        </span>
-        <span className="text-xs text-base-content/50 tabular-nums shrink-0">
-          {total === 0 ? "cleaned" : `${loadedCount} / ${total}`}
-        </span>
-      </div>
-      {total > 0 && (
-        <progress
-          className="progress progress-primary w-full h-1"
-          value={loadedCount}
-          max={total}
-        />
-      )}
-      {allDone && (
-        <p className="text-xs text-success">All dead relays removed.</p>
-      )}
-      {!allDone && total > 0 && (
-        <div className="flex flex-col gap-0">
-          {relayList.map((url) => (
-            <RelayRow
-              key={url}
-              relayUrl={url}
-              verdict={step.verdicts[url]}
-              isChecking={isChecking}
-              onRemove={handleRemove}
-              removing={removing.has(url)}
-            />
-          ))}
-        </div>
-      )}
-      {error && <p className="text-xs text-error">{error}</p>}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Build steps from loader state
-// ---------------------------------------------------------------------------
-
-const SIMPLE_SECTIONS: Array<{
-  kind: SimpleListStep["kind"];
+type ListSectionConfig = {
   label: string;
   eventKind: number;
-  key: keyof Omit<DeadRelaysState, "nip65">;
-}> = [
-  {
-    kind: "favorite-relays",
-    label: "Favorite Relays",
-    eventKind: 10012,
-    key: "favoriteRelays",
-  },
-  {
-    kind: "search-relays",
-    label: "Search Relays",
-    eventKind: 10007,
-    key: "searchRelays",
-  },
-  {
-    kind: "dm-relays",
-    label: "DM Relays (inbox)",
-    eventKind: 10050,
-    key: "dmRelays",
-  },
-  {
-    kind: "blocked-relays",
-    label: "Blocked Relays",
-    eventKind: 10006,
-    key: "blockedRelays",
-  },
-  {
-    kind: "key-package-relays",
-    label: "Key Package Relays",
-    eventKind: 10051,
-    key: "keyPackageRelays",
-  },
-];
+  state: RelayListState | null | undefined;
+  markers?: Record<string, RelayMarker>;
+  showSearch?: boolean;
+  showAuth?: boolean;
+  isChecking: boolean;
+  subjectPubkey: string;
+  publish: (template: EventTemplate) => Promise<void>;
+};
 
-function buildNip65Step(
-  nip65: Nip65RelayListState | null | undefined,
-): Nip65ListStep {
-  return {
-    kind: "nip65",
-    label: "Relay List (NIP-65)",
-    eventKind: 10002,
-    urls: nip65?.urls ?? [],
-    markers: nip65?.markers ?? {},
-    verdicts: nip65?.verdicts ?? {},
-  };
-}
+function ListSection({
+  label,
+  eventKind,
+  state,
+  markers,
+  showSearch,
+  showAuth,
+  isChecking,
+  subjectPubkey,
+  publish,
+}: ListSectionConfig) {
+  const urls = state?.urls ?? null;
+  const entries = state?.entries ?? {};
 
-function buildSimpleSteps(
-  state: DeadRelaysState | null | undefined,
-): SimpleListStep[] {
-  return SIMPLE_SECTIONS.map(({ kind, label, eventKind, key }) => {
-    const listState = state?.[key] as RelayListState | undefined;
-    return {
-      kind,
-      label,
-      eventKind,
-      urls: listState?.urls ?? [],
-      verdicts: listState?.verdicts ?? {},
-    };
-  });
-}
+  // Track which URLs are queued for removal (local UI state)
+  const [removedUrls, setRemovedUrls] = useState<Set<string>>(new Set());
+  const [publishing, setPublishing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [published, setPublished] = useState(false);
 
-// ---------------------------------------------------------------------------
-// Helpers for all-checked-and-healthy derivation
-// ---------------------------------------------------------------------------
-
-function isListFullyHealthy(
-  urls: string[],
-  verdicts: Record<string, RelayVerdict | null>,
-): boolean {
-  if (urls.length === 0) return true;
-  return urls.every(
-    (url) => verdicts[url] !== null && verdicts[url] !== "offline",
+  const urlList = useMemo(() => urls ?? [], [urls]);
+  const pendingRemovals = useMemo(
+    () => urlList.filter((url) => removedUrls.has(url)),
+    [urlList, removedUrls],
   );
-}
 
-// ---------------------------------------------------------------------------
-// ReadOnlyBanner
-// ---------------------------------------------------------------------------
+  function handleToggleRemove(url: string) {
+    setRemovedUrls((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+  }
 
-function ReadOnlyBanner() {
+  async function handlePublishRemovals() {
+    if (pendingRemovals.length === 0) return;
+    setPublishing(true);
+    setError(null);
+    try {
+      const existing = eventStore.getReplaceable(eventKind, subjectPubkey);
+      if (!existing) throw new Error(`Could not find kind:${eventKind} event.`);
+
+      let draft: EventTemplate;
+
+      if (eventKind === 10002) {
+        // NIP-65: remove from inbox and/or outbox depending on marker
+        let current: EventTemplate = existing;
+        for (const url of pendingRemovals) {
+          const marker = markers?.[url];
+          if (!marker || marker === "both" || marker === "write") {
+            current = await factory.modify(current, removeOutboxRelay(url));
+          }
+          if (!marker || marker === "both" || marker === "read") {
+            current = await factory.modify(current, removeInboxRelay(url));
+          }
+        }
+        draft = current;
+      } else {
+        // All other list kinds: remove relay tags
+        const tagOps = pendingRemovals.map((url) => removeRelayTag(url));
+        draft = await factory.modify(existing, modifyPublicTags(...tagOps));
+      }
+
+      await publish(draft);
+      setPublished(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update relay list.");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  // Don't render if list event not found
+  if (urls === null || urlList.length === 0) return null;
+
+  const removedCount = pendingRemovals.length;
+
   return (
-    <div className="bg-info/10 border border-info/30 rounded-xl p-3 text-xs text-info">
-      You're viewing someone else's account. Removals will be queued as drafts
-      and need signing at the end.
+    <div className="flex flex-col gap-1.5">
+      {/* Section header */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-base-content/50 uppercase tracking-wide">
+          {label}
+        </span>
+        {removedCount > 0 && !published && (
+          <button
+            className="btn btn-error btn-xs"
+            onClick={handlePublishRemovals}
+            disabled={publishing}
+          >
+            {publishing ? (
+              <span className="loading loading-spinner loading-xs" />
+            ) : (
+              `Remove ${removedCount}`
+            )}
+          </button>
+        )}
+        {published && (
+          <span className="badge badge-success badge-xs">updated</span>
+        )}
+      </div>
+
+      {/* Relay rows */}
+      <div className="flex flex-col divide-y divide-base-200">
+        {urlList.map((url) => (
+          <RelayRow
+            key={url}
+            entry={entries[url] ?? { url, verdict: null, capabilities: {} }}
+            marker={markers?.[url]}
+            isChecking={isChecking}
+            showSearch={showSearch}
+            showAuth={showAuth}
+            pendingRemove={publishing}
+            removedUrls={published ? new Set() : removedUrls}
+            onRemove={handleToggleRemove}
+          />
+        ))}
+      </div>
+
+      {error && <p className="text-xs text-error">{error}</p>}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function countOffline(state: RelayListState | Nip65RelayListState | null | undefined): number {
+  if (!state?.urls) return 0;
+  return state.urls.filter((url) => state.entries[url]?.verdict === "offline").length;
 }
 
 // ---------------------------------------------------------------------------
@@ -471,90 +346,118 @@ export function ReportContent({
   onContinue,
   isDoneSection,
 }: SectionProps<DeadRelaysState>) {
-  const isReadOnly = account === null;
   const isLoading = !loaderState?.complete;
   const state = loaderState?.data;
 
-  const nip65Step = useMemo(() => buildNip65Step(state?.nip65), [state?.nip65]);
-  const simpleSteps = useMemo(() => buildSimpleSteps(state), [state]);
+  const hasAnyRelays = useMemo(() => {
+    if (!state) return false;
+    return (
+      (state.nip65.urls?.length ?? 0) > 0 ||
+      (state.favoriteRelays.urls?.length ?? 0) > 0 ||
+      (state.searchRelays.urls?.length ?? 0) > 0 ||
+      (state.dmRelays.urls?.length ?? 0) > 0 ||
+      (state.blockedRelays.urls?.length ?? 0) > 0 ||
+      (state.keyPackageRelays.urls?.length ?? 0) > 0
+    );
+  }, [state]);
 
-  const hasAnyRelays = useMemo(
-    () =>
-      nip65Step.urls.length > 0 || simpleSteps.some((s) => s.urls.length > 0),
-    [nip65Step, simpleSteps],
-  );
-
-  const allCheckedAndHealthy = useMemo(() => {
-    if (!hasAnyRelays) return false;
-    if (!isListFullyHealthy(nip65Step.urls, nip65Step.verdicts)) return false;
-    return simpleSteps.every((s) => isListFullyHealthy(s.urls, s.verdicts));
-  }, [hasAnyRelays, nip65Step, simpleSteps]);
+  const totalOffline = useMemo(() => {
+    if (!state) return 0;
+    return (
+      countOffline(state.nip65) +
+      countOffline(state.favoriteRelays) +
+      countOffline(state.searchRelays) +
+      countOffline(state.dmRelays) +
+      countOffline(state.blockedRelays) +
+      countOffline(state.keyPackageRelays)
+    );
+  }, [state]);
 
   const [reported, setReported] = useState(false);
 
-  // Record the outcome as soon as loading finishes — but don't auto-advance
   useEffect(() => {
     if (!isLoading && hasAnyRelays && !reported) {
       setReported(true);
-      const totalRelays =
-        nip65Step.urls.length +
-        simpleSteps.reduce((sum, s) => sum + s.urls.length, 0);
-      const offlineCount =
-        nip65Step.urls.filter((u) => nip65Step.verdicts[u] === "offline")
-          .length +
-        simpleSteps.reduce(
-          (sum, s) =>
-            sum + s.urls.filter((u) => s.verdicts[u] === "offline").length,
-          0,
-        );
+      const total =
+        (state?.nip65.urls?.length ?? 0) +
+        (state?.favoriteRelays.urls?.length ?? 0) +
+        (state?.searchRelays.urls?.length ?? 0) +
+        (state?.dmRelays.urls?.length ?? 0) +
+        (state?.blockedRelays.urls?.length ?? 0) +
+        (state?.keyPackageRelays.urls?.length ?? 0);
       onDone({
-        status: offlineCount > 0 ? "error" : "clean",
+        status: totalOffline > 0 ? "error" : "clean",
         summary:
-          offlineCount > 0
-            ? `${offlineCount} offline relay${offlineCount !== 1 ? "s" : ""} found`
-            : `All ${totalRelays} relay${totalRelays !== 1 ? "s" : ""} online`,
+          totalOffline > 0
+            ? `${totalOffline} offline relay${totalOffline !== 1 ? "s" : ""} found`
+            : `All ${total} relay${total !== 1 ? "s" : ""} online`,
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, hasAnyRelays]);
 
-  // ---------------------------------------------------------------------------
-  // Loading state — show relay rows as soon as URLs arrive
-  // ---------------------------------------------------------------------------
+  const isReadOnly = account === null;
+
+  const commonProps = {
+    isChecking: isLoading,
+    subjectPubkey: subject.pubkey,
+    publish: publishEvent,
+  };
+
+  const content = (
+    <div className="flex flex-col gap-5">
+      <ListSection
+        label="Relay List (NIP-65)"
+        eventKind={10002}
+        state={state?.nip65}
+        markers={state?.nip65.markers}
+        {...commonProps}
+      />
+      <ListSection
+        label="Favorite Relays"
+        eventKind={10012}
+        state={state?.favoriteRelays}
+        {...commonProps}
+      />
+      <ListSection
+        label="Search Relays"
+        eventKind={10007}
+        state={state?.searchRelays}
+        showSearch
+        {...commonProps}
+      />
+      <ListSection
+        label="DM Relays"
+        eventKind={10050}
+        state={state?.dmRelays}
+        showAuth
+        {...commonProps}
+      />
+      <ListSection
+        label="Blocked Relays"
+        eventKind={10006}
+        state={state?.blockedRelays}
+        {...commonProps}
+      />
+      <ListSection
+        label="Key Package Relays"
+        eventKind={10051}
+        state={state?.keyPackageRelays}
+        {...commonProps}
+      />
+    </div>
+  );
+
   if (isLoading) {
-    const hasPartialData =
-      nip65Step.urls.length > 0 || simpleSteps.some((s) => s.urls.length > 0);
     return (
       <div className="flex flex-col gap-4 py-2">
         <div className="flex items-center gap-3">
           <span className="loading loading-spinner loading-sm text-primary" />
           <p className="text-sm text-base-content/60">
-            {hasPartialData ? "Checking relays…" : "Loading relay lists…"}
+            {hasAnyRelays ? "Checking relay connectivity…" : "Loading relay lists…"}
           </p>
         </div>
-        {hasPartialData && (
-          <div className="flex flex-col gap-4">
-            {nip65Step.urls.length > 0 && (
-              <Nip65Section
-                step={nip65Step}
-                subjectPubkey={subject.pubkey}
-                publish={publishEvent}
-                isChecking={true}
-              />
-            )}
-            {simpleSteps
-              .filter((s) => s.urls.length > 0)
-              .map((step) => (
-                <SimpleListSection
-                  key={step.kind}
-                  step={step}
-                  subjectPubkey={subject.pubkey}
-                  publish={publishEvent}
-                  isChecking={true}
-                />
-              ))}
-          </div>
-        )}
+        {hasAnyRelays && content}
         {!isDoneSection && (
           <button
             className="btn btn-ghost btn-sm w-full"
@@ -591,64 +494,30 @@ export function ReportContent({
     );
   }
 
-  const hasOffline =
-    nip65Step.urls.some((u) => nip65Step.verdicts[u] === "offline") ||
-    simpleSteps.some((s) => s.urls.some((u) => s.verdicts[u] === "offline"));
-
   return (
     <div className="flex flex-col gap-4 py-2">
-      {isLoading ? (
-        <p className="text-xs text-base-content/50">
-          Checking relay connectivity…
-        </p>
-      ) : allCheckedAndHealthy ? (
+      {/* Summary */}
+      {totalOffline === 0 ? (
         <div className="flex items-center gap-2 text-success">
-          <svg
-            className="size-4 shrink-0"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M5 13l4 4L19 7"
-            />
+          <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
           <p className="text-sm font-medium">All relays online</p>
         </div>
-      ) : hasOffline ? (
-        <p className="text-xs text-warning">
-          Some relays are offline — remove them to keep your lists healthy.
-        </p>
       ) : (
-        <p className="text-xs text-base-content/50">
-          Checking relay connectivity…
+        <p className="text-sm text-warning">
+          {totalOffline} offline relay{totalOffline !== 1 ? "s" : ""} found — click the trash icon to queue removal.
         </p>
       )}
 
-      {nip65Step.urls.length > 0 && (
-        <Nip65Section
-          step={nip65Step}
-          subjectPubkey={subject.pubkey}
-          publish={publishEvent}
-          isChecking={isLoading}
-        />
-      )}
-      {simpleSteps
-        .filter((s) => s.urls.length > 0)
-        .map((step) => (
-          <SimpleListSection
-            key={step.kind}
-            step={step}
-            subjectPubkey={subject.pubkey}
-            publish={publishEvent}
-            isChecking={isLoading}
-          />
-        ))}
+      {content}
 
-      {isReadOnly && <ReadOnlyBanner />}
+      {isReadOnly && (
+        <div className="bg-info/10 border border-info/30 rounded-xl p-3 text-xs text-info">
+          You're viewing someone else's account. Removals will be queued as
+          drafts and need signing at the end.
+        </div>
+      )}
 
       {!isDoneSection && (
         <button className="btn btn-primary btn-sm w-full" onClick={onContinue}>

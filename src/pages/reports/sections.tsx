@@ -1,10 +1,5 @@
 // ---------------------------------------------------------------------------
 // REPORT_SECTIONS — ordered registry of all diagnostic accordion sections.
-//
-// Each entry includes:
-//   - name/label/description for the accordion header UI
-//   - createLoader — called once per page mount to start the RxJS stream
-//   - Component    — renders the section body, receives loaderState as a prop
 // ---------------------------------------------------------------------------
 
 import type { ReportSectionDefinition } from "./accordion-types.ts";
@@ -15,17 +10,11 @@ import { ReportContent as ProfileMetadataContent } from "./profile-metadata/page
 import deadRelaysLoader from "./dead-relays/loader.ts";
 import { ReportContent as DeadRelaysContent } from "./dead-relays/page.tsx";
 
-import { createLoader as createDmRelayAuthLoader } from "./dm-relay-auth/loader.ts";
-import { ReportContent as DmRelayAuthContent } from "./dm-relay-auth/page.tsx";
-
 import { createLoader as createFollowListRelaysLoader } from "./follow-list-relays/loader.ts";
 import { ReportContent as FollowListRelaysContent } from "./follow-list-relays/page.tsx";
 
 import { createLoader as createMetadataBroadcastLoader } from "./metadata-broadcast/loader.ts";
 import { ReportContent as MetadataBroadcastContent } from "./metadata-broadcast/page.tsx";
-
-import { createLoader as createSearchRelayNip50Loader } from "./search-relay-nip50/loader.ts";
-import { ReportContent as SearchRelayNip50Content } from "./search-relay-nip50/page.tsx";
 
 import { createLoader as createKeyPackagesLoader } from "./key-packages/loader.ts";
 import { ReportContent as KeyPackagesContent } from "./key-packages/page.tsx";
@@ -40,18 +29,11 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     Component: ProfileMetadataContent,
   },
   {
-    name: "dead-relays",
-    label: "Dead Relays",
-    description: "Checks online/offline status across all your relay lists",
+    name: "relay-health",
+    label: "Relay Health",
+    description: "Checks connectivity, NIP-50 search, and DM auth across all your relay lists",
     createLoader: deadRelaysLoader,
     Component: DeadRelaysContent,
-  },
-  {
-    name: "dm-relay-auth",
-    label: "DM Relay Auth",
-    description: "Checks whether your DM relays enforce NIP-42 authentication",
-    createLoader: createDmRelayAuthLoader,
-    Component: DmRelayAuthContent,
   },
   {
     name: "follow-list-relays",
@@ -66,13 +48,6 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     description: "Checks whether your metadata events are on all your relays",
     createLoader: createMetadataBroadcastLoader,
     Component: MetadataBroadcastContent,
-  },
-  {
-    name: "search-relay-nip50",
-    label: "Search Relays",
-    description: "Checks whether your search relays support NIP-50",
-    createLoader: createSearchRelayNip50Loader,
-    Component: SearchRelayNip50Content,
   },
   {
     name: "key-packages",

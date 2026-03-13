@@ -1,6 +1,73 @@
 import { useNavigate } from "react-router";
 import type { NostrEvent } from "applesauce-core/helpers";
+import { getEventUID } from "applesauce-core/helpers";
+import { draftEvents$ } from "../../lib/draftEvents.ts";
 import { CompleteHeader, SuccessBadge } from "./_shared.tsx";
+
+// ---------------------------------------------------------------------------
+// Helpers (duplicated from SelfView to avoid a shared module dependency)
+// ---------------------------------------------------------------------------
+
+function kindLabel(kind: number): string {
+  switch (kind) {
+    case 0: return "Profile metadata";
+    case 3: return "Follow list";
+    case 5: return "Event deletion";
+    case 10002: return "Relay list (NIP-65)";
+    case 10006: return "Blocked relays";
+    case 10007: return "Search relays";
+    case 10012: return "Favorite relays";
+    case 10050: return "DM relays";
+    case 10051: return "Key package relays";
+    default: return `Kind ${kind}`;
+  }
+}
+
+function DraftEventRow({
+  event,
+  onRemove,
+}: {
+  event: NostrEvent;
+  onRemove: () => void;
+}) {
+  const uid = getEventUID(event);
+  const label = kindLabel(event.kind);
+  const deletedIds = event.kind === 5
+    ? event.tags.filter((t) => t[0] === "e").map((t) => t[1])
+    : [];
+
+  return (
+    <div className="flex items-start gap-3 py-2.5 border-b border-base-200 last:border-0">
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="badge badge-xs badge-ghost font-mono">kind:{event.kind}</span>
+          <span className="text-sm text-base-content">{label}</span>
+        </div>
+        {deletedIds.length > 0 && (
+          <p className="text-xs text-base-content/40 font-mono truncate">
+            deletes {deletedIds[0].slice(0, 12)}…
+            {deletedIds.length > 1 && ` +${deletedIds.length - 1} more`}
+          </p>
+        )}
+        {event.kind !== 5 && (
+          <p className="text-xs text-base-content/40 font-mono truncate">
+            {uid.slice(0, 24)}…
+          </p>
+        )}
+      </div>
+      <button
+        className="btn btn-ghost btn-xs text-base-content/40 hover:text-error hover:bg-error/10 shrink-0 mt-0.5"
+        onClick={onRemove}
+        aria-label={`Remove ${label} from queue`}
+        title="Remove from queue"
+      >
+        <svg className="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // ReadOnlyView — no signer present
@@ -63,6 +130,14 @@ function ReadOnlyView({
 
   const fixes = `${draftEvents.length} ${draftEvents.length === 1 ? "fix" : "fixes"} ready to publish`;
 
+  function handleRemove(event: NostrEvent) {
+    const uid = getEventUID(event);
+    const current = draftEvents$.getValue();
+    const next = { ...current };
+    delete next[uid];
+    draftEvents$.next(next);
+  }
+
   return (
     <>
       <CompleteHeader
@@ -80,6 +155,18 @@ function ReadOnlyView({
             referral link instead.
           </p>
         </div>
+
+        {/* Draft list */}
+        <div className="bg-base-100 rounded-lg px-3 py-1 flex flex-col">
+          {draftEvents.map((event) => (
+            <DraftEventRow
+              key={getEventUID(event)}
+              event={event}
+              onRemove={() => handleRemove(event)}
+            />
+          ))}
+        </div>
+
         <button
           className="btn btn-primary w-full"
           onClick={() =>

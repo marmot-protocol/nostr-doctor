@@ -1,20 +1,16 @@
 // ---------------------------------------------------------------------------
 // Dead Relays loader
 //
-// Checks all relay list types for dead (offline) relays:
-//   - NIP-65 relays  (kind:10002) — combined read/write/both per URL
-//   - Favorite relays       (kind:10012)
-//   - Search relays         (kind:10007)
-//   - DM relays             (kind:10050)
-//   - Blocked relays        (kind:10006)
+// Checks all relay list types for dead (offline) relays, plus per-list
+// capability checks:
+//   - NIP-65 relays    (kind:10002) — read/write/both markers + online verdict
+//   - Favorite relays  (kind:10012) — online verdict
+//   - Search relays    (kind:10007) — online verdict + NIP-50 support check
+//   - DM relays        (kind:10050) — online verdict + NIP-42 auth probe
+//   - Blocked relays   (kind:10006) — online verdict
+//   - Key package relays (kind:10051) — online verdict
 //
-// Pattern C: independent sub-loaders composed via combineLatest.
-//   Each sub-loader: loadAddressableEvent → map URLs → switchMap →
-//                    merge(relayVerdict per url) → scan into verdicts record
-//
-// State streams incrementally as each sub-loader resolves. Each sub-loader
-// is independently subscribable for debugging — if the combined loader hangs,
-// subscribe to each sub-loader individually to isolate which list is stuck.
+// State streams incrementally as each sub-loader resolves.
 // The page layer applies takeUntil(timer(N)) + toLoaderState().
 // ---------------------------------------------------------------------------
 
@@ -33,19 +29,30 @@ import {
 } from "rxjs";
 import {
   catchError,
+  defaultIfEmpty,
   map,
   scan,
   startWith,
   switchMap,
   takeUntil,
+  timeout,
 } from "rxjs/operators";
 import {
   relayVerdict,
   type RelayVerdict,
 } from "../../../lib/relay-monitors.ts";
-import { LOADER_TIMEOUT_MS } from "../../../lib/timeouts";
-import { loadAddressableEvent } from "../../../observable/loaders/load-addressable-event";
+import { pool } from "../../../lib/relay.ts";
+import { LOADER_TIMEOUT_MS } from "../../../lib/timeouts.ts";
+import { loadAddressableEvent } from "../../../observable/loaders/load-addressable-event.ts";
+import { probeRelayAuth } from "../../../observable/loaders/probe-relay-auth.ts";
 import { KEY_PACKAGE_RELAY_LIST_KIND } from "../key-package-relays/loader.ts";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const SEARCH_PROBE_TIMEOUT_MS = 10_000;
+const AUTH_PROBE_TIMEOUT_MS = 12_000;
 
 // ---------------------------------------------------------------------------
 // State types
@@ -53,25 +60,39 @@ import { KEY_PACKAGE_RELAY_LIST_KIND } from "../key-package-relays/loader.ts";
 
 export type RelayMarker = "read" | "write" | "both";
 
-/** State for a single relay list: the URLs and the per-URL online verdict. */
-export type RelayListState = {
-  /** Relay URLs from this list event. null = event not found / still loading. */
-  urls: string[] | null;
-  /**
-   * Per-relay verdict. null = verdict still in progress.
-   * Empty object while urls is null or empty.
-   */
-  verdicts: Record<string, RelayVerdict | null>;
+/** NIP-50 search support status */
+export type SearchSupport = "supported" | "unsupported" | "unknown" | null;
+
+/** NIP-42 auth enforcement status */
+export type AuthStatus = "protected" | "unprotected" | "unknown" | null;
+
+/** Per-relay capability data (filled in depending on list type) */
+export type RelayCapabilities = {
+  /** For search relays: NIP-50 support. null = not checked / still loading. */
+  searchSupport?: SearchSupport;
+  /** For DM relays: NIP-42 auth enforcement. null = not checked / still loading. */
+  authStatus?: AuthStatus;
 };
 
-/** State for the NIP-65 relay list: combined read/write/both markers + verdicts. */
-export type Nip65RelayListState = {
-  /** All unique relay URLs from the kind:10002 event. null = not yet loaded. */
+/** State for a single relay list entry. */
+export type RelayEntry = {
+  url: string;
+  verdict: RelayVerdict | null;
+  capabilities: RelayCapabilities;
+};
+
+/** State for a relay list. */
+export type RelayListState = {
+  /** null = event not yet found / still loading */
   urls: string[] | null;
-  /** Per-relay read/write/both marker derived from the `r` tag. */
+  entries: Record<string, RelayEntry>;
+};
+
+/** State for the NIP-65 relay list with read/write/both markers. */
+export type Nip65RelayListState = {
+  urls: string[] | null;
   markers: Record<string, RelayMarker>;
-  /** Per-relay online verdict. null = verdict still in progress. */
-  verdicts: Record<string, RelayVerdict | null>;
+  entries: Record<string, RelayEntry>;
 };
 
 /** Combined state across all relay list types. */
@@ -84,25 +105,14 @@ export type DeadRelaysState = {
   keyPackageRelays: RelayListState;
 };
 
-const EMPTY_LIST: RelayListState = { urls: null, verdicts: {} };
-const EMPTY_NIP65: Nip65RelayListState = {
-  urls: null,
-  markers: {},
-  verdicts: {},
-};
+const EMPTY_LIST: RelayListState = { urls: null, entries: {} };
+const EMPTY_NIP65: Nip65RelayListState = { urls: null, markers: {}, entries: {} };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Parses a kind:10002 event's `r` tags and returns a map of
- * url → "read" | "write" | "both".
- * A relay with no marker is both read and write.
- */
-function parseNip65Markers(
-  event: NostrEvent | null,
-): Record<string, RelayMarker> {
+function parseNip65Markers(event: NostrEvent | null): Record<string, RelayMarker> {
   if (!event) return {};
   const markers: Record<string, RelayMarker> = {};
   for (const tag of event.tags) {
@@ -115,7 +125,6 @@ function parseNip65Markers(
     } else if (mode === "write") {
       markers[url] = existing === "read" ? "both" : "write";
     } else {
-      // no marker = both
       markers[url] = "both";
     }
   }
@@ -123,49 +132,98 @@ function parseNip65Markers(
 }
 
 // ---------------------------------------------------------------------------
-// Shared helper operator
+// Per-relay probes
 // ---------------------------------------------------------------------------
 
-/**
- * Takes a string[] source and produces { urls, verdicts } where each relay's
- * verdict updates independently as it arrives — no synchronization barrier.
- *
- * Uses mergeMap so every relay's verdict stream runs in parallel. Each
- * emission is a {url, verdict} patch that scan folds into the growing record.
- * This means relay rows light up one-by-one as each monitor reports back,
- * rather than all flipping simultaneously when the last relay resolves.
- */
-function relayListStatus(): OperatorFunction<string[], RelayListState> {
+function probeSearchSupport(url: string): Observable<SearchSupport> {
+  return pool
+    .relay(url)
+    .request({ kinds: [1], search: "nostr", limit: 1 })
+    .pipe(
+      map(() => "supported" as SearchSupport),
+      defaultIfEmpty("supported" as SearchSupport),
+      catchError(() => of("unsupported" as SearchSupport)),
+      timeout({ first: SEARCH_PROBE_TIMEOUT_MS, with: () => of("unknown" as SearchSupport) }),
+      catchError(() => of("unknown" as SearchSupport)),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Core streaming operator
+//
+// Takes a stream of URL arrays and emits RelayListState updates as:
+//   1. Each relay's online verdict resolves
+//   2. Each relay's optional capability check resolves
+//
+// capabilityLoader: given a url, returns an Observable<RelayCapabilities>
+//   that completes after the capability is known.
+// ---------------------------------------------------------------------------
+
+type CapabilityLoader = (url: string) => Observable<RelayCapabilities>;
+
+function noCapabilities(): Observable<RelayCapabilities> {
+  return of({});
+}
+
+function relayListStatus(
+  capabilityLoader: CapabilityLoader = noCapabilities,
+): OperatorFunction<string[], RelayListState> {
   return (source) =>
     source.pipe(
       switchMap((urls) => {
-        // Seed: emit the full URL list with all verdicts null immediately
         const seed: RelayListState = {
           urls,
-          verdicts: Object.fromEntries(urls.map((url) => [url, null])),
+          entries: Object.fromEntries(
+            urls.map((url) => [
+              url,
+              { url, verdict: null, capabilities: {} } satisfies RelayEntry,
+            ]),
+          ),
         };
+
         if (urls.length === 0) return of(seed);
 
-        // One patch stream per relay — each completes independently
-        const patches$ = merge(
+        // Verdict patches — one per relay, complete independently
+        const verdictPatches$ = merge(
           ...urls.map((url) =>
             relayVerdict(url).pipe(
               catchError(() => of("unknown" as RelayVerdict)),
-              map((verdict) => ({ url, verdict })),
+              map((verdict) => ({ type: "verdict" as const, url, verdict })),
             ),
           ),
         );
 
-        return patches$.pipe(
-          // Fold each patch into the accumulated state
-          scan(
-            (state, { url, verdict }) => ({
-              ...state,
-              verdicts: { ...state.verdicts, [url]: verdict },
-            }),
-            seed,
+        // Capability patches — one per relay, complete independently
+        const capabilityPatches$ = merge(
+          ...urls.map((url) =>
+            capabilityLoader(url).pipe(
+              catchError(() => of({} as RelayCapabilities)),
+              map((capabilities) => ({ type: "capability" as const, url, capabilities })),
+            ),
           ),
-          // Start with the seed so the page can render all rows immediately
+        );
+
+        return merge(verdictPatches$, capabilityPatches$).pipe(
+          scan((state, patch): RelayListState => {
+            const prev = state.entries[patch.url] ?? { url: patch.url, verdict: null, capabilities: {} };
+            if (patch.type === "verdict") {
+              return {
+                ...state,
+                entries: {
+                  ...state.entries,
+                  [patch.url]: { ...prev, verdict: patch.verdict },
+                },
+              };
+            } else {
+              return {
+                ...state,
+                entries: {
+                  ...state.entries,
+                  [patch.url]: { ...prev, capabilities: { ...prev.capabilities, ...patch.capabilities } },
+                },
+              };
+            }
+          }, seed),
           startWith(seed),
         );
       }),
@@ -176,71 +234,62 @@ function relayListStatus(): OperatorFunction<string[], RelayListState> {
 // Per-list sub-loaders
 // ---------------------------------------------------------------------------
 
-/** NIP-65 combined loader — merges read and write relays into one list with markers. */
 export function createNip65Loader(user: User): Observable<Nip65RelayListState> {
   return loadAddressableEvent(user, kinds.RelayList).pipe(
-    // Fan out verdict per unique URL while preserving markers
     switchMap((event) => {
       const markerMap = parseNip65Markers(event);
       const urls = Object.keys(markerMap);
       if (urls.length === 0) {
-        return of({
-          urls,
-          markers: markerMap,
-          verdicts: {} as Record<string, RelayVerdict | null>,
-        });
+        return of({ urls, markers: markerMap, entries: {} } as Nip65RelayListState);
       }
-      // Build a RelayListState stream for the URL set, then re-attach markers
       return of(urls).pipe(
         relayListStatus(),
-        map(({ urls: u, verdicts }) => ({
-          urls: u,
-          markers: markerMap,
-          verdicts,
-        })),
+        map(({ urls: u, entries }) => ({ urls: u, markers: markerMap, entries })),
       );
     }),
     catchError(() => of(EMPTY_NIP65)),
   );
 }
 
-export function createFavoriteRelaysLoader(
-  user: User,
-): Observable<RelayListState> {
+export function createFavoriteRelaysLoader(user: User): Observable<RelayListState> {
   return loadAddressableEvent(user, kinds.FavoriteRelays).pipe(
     map((event) => getRelaysFromList(event)),
     relayListStatus(),
   );
 }
 
-export function createSearchRelaysLoader(
-  user: User,
-): Observable<RelayListState> {
+export function createSearchRelaysLoader(user: User): Observable<RelayListState> {
   return loadAddressableEvent(user, kinds.SearchRelaysList).pipe(
     map((event) => getRelaysFromList(event)),
-    relayListStatus(),
+    relayListStatus((url) =>
+      probeSearchSupport(url).pipe(
+        map((searchSupport) => ({ searchSupport }) satisfies RelayCapabilities),
+      ),
+    ),
   );
 }
 
 export function createDmRelaysLoader(user: User): Observable<RelayListState> {
   return loadAddressableEvent(user, kinds.DirectMessageRelaysList).pipe(
     map((event) => getRelaysFromList(event)),
-    relayListStatus(),
+    relayListStatus((url) =>
+      probeRelayAuth(url, user.pubkey).pipe(
+        timeout({ first: AUTH_PROBE_TIMEOUT_MS, with: () => of("unknown" as const) }),
+        catchError(() => of("unknown" as const)),
+        map((authStatus) => ({ authStatus }) satisfies RelayCapabilities),
+      ),
+    ),
   );
 }
 
-export function createBlockedRelaysLoader(
-  user: User,
-): Observable<RelayListState> {
+export function createBlockedRelaysLoader(user: User): Observable<RelayListState> {
   return loadAddressableEvent(user, kinds.BlockedRelaysList).pipe(
     map((event) => getRelaysFromList(event)),
     relayListStatus(),
   );
 }
 
-export function createKeyPackageRelaysLoader(
-  user: User,
-): Observable<RelayListState> {
+export function createKeyPackageRelaysLoader(user: User): Observable<RelayListState> {
   return loadAddressableEvent(user, KEY_PACKAGE_RELAY_LIST_KIND).pipe(
     map((event) => getRelaysFromList(event)),
     relayListStatus(),
@@ -251,27 +300,15 @@ export function createKeyPackageRelaysLoader(
 // Composed loader
 // ---------------------------------------------------------------------------
 
-function streaming(
-  loader: Observable<RelayListState>,
-): Observable<RelayListState> {
-  return loader.pipe(
-    startWith(EMPTY_LIST),
-    catchError(() => of(EMPTY_LIST)),
-  );
+function streaming(loader: Observable<RelayListState>): Observable<RelayListState> {
+  return loader.pipe(startWith(EMPTY_LIST), catchError(() => of(EMPTY_LIST)));
 }
 
-function streamingNip65(
-  loader: Observable<Nip65RelayListState>,
-): Observable<Nip65RelayListState> {
-  return loader.pipe(
-    startWith(EMPTY_NIP65),
-    catchError(() => of(EMPTY_NIP65)),
-  );
+function streamingNip65(loader: Observable<Nip65RelayListState>): Observable<Nip65RelayListState> {
+  return loader.pipe(startWith(EMPTY_NIP65), catchError(() => of(EMPTY_NIP65)));
 }
 
-export default function deadRelaysLoader(
-  user: User,
-): Observable<DeadRelaysState> {
+export default function deadRelaysLoader(user: User): Observable<DeadRelaysState> {
   return combineLatest({
     nip65: streamingNip65(createNip65Loader(user)),
     favoriteRelays: streaming(createFavoriteRelaysLoader(user)),
