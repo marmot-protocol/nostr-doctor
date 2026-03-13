@@ -275,14 +275,12 @@ function EmptyState({ hasRelays }: { hasRelays: boolean }) {
 // ---------------------------------------------------------------------------
 
 export function ReportContent({
-  account,
   publish: publishEvent,
   loaderState,
   onDone,
   onContinue,
   isDoneSection,
 }: SectionProps<KeyPackagesState>) {
-  const isReadOnly = account === null;
   const isLoading = !loaderState?.complete;
   const state = loaderState?.data;
 
@@ -291,12 +289,6 @@ export function ReportContent({
 
   // Set of package IDs the user has toggled for deletion
   const [queuedIds, setQueuedIds] = useState<Set<string>>(new Set());
-  // "idle" | "publishing" | "done" | "error"
-  const [publishState, setPublishState] = useState<"idle" | "publishing" | "done" | "error">("idle");
-  const [publishError, setPublishError] = useState<string | null>(null);
-  // IDs that were successfully deleted (to show strikethrough after done)
-  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
-
   const [reported, setReported] = useState(false);
 
   useEffect(() => {
@@ -323,33 +315,18 @@ export function ReportContent({
     });
   }
 
-  async function handlePublishDeletions() {
-    const toDelete = packages.filter((p) => queuedIds.has(p.id) && !deletedIds.has(p.id));
-    if (toDelete.length === 0) return;
-
-    setPublishState("publishing");
-    setPublishError(null);
-    try {
-      // Build a single NIP-09 kind:5 event referencing all queued event IDs
+  async function handleContinue() {
+    // If any packages are queued, build a single kind:5 deletion event and
+    // queue it into draftEvents$ via publish() before advancing.
+    const toDelete = packages.filter((p) => queuedIds.has(p.id));
+    if (toDelete.length > 0) {
       const draft = await factory.build(
         { kind: 5 },
         setDeleteEvents(toDelete.map((p) => p.event)),
       );
       await publishEvent(draft);
-      setDeletedIds((prev) => new Set([...prev, ...toDelete.map((p) => p.id)]));
-      setQueuedIds(new Set());
-      setPublishState("done");
-    } catch (e) {
-      setPublishState("error");
-      setPublishError(e instanceof Error ? e.message : "Failed to publish deletions.");
     }
-  }
-
-  // Derive per-card delete state from the batched state
-  function deleteStateFor(id: string): "idle" | "pending" | "done" | "error" {
-    if (deletedIds.has(id)) return "done";
-    if (publishState === "publishing" && queuedIds.has(id)) return "pending";
-    return "idle";
+    onContinue();
   }
 
   // Loading state
@@ -371,7 +348,7 @@ export function ReportContent({
                 key={pkg.id}
                 pkg={pkg}
                 onDelete={handleToggleQueue}
-                deleteState={queuedIds.has(pkg.id) ? "pending" : deleteStateFor(pkg.id)}
+                deleteState={queuedIds.has(pkg.id) ? "pending" : "idle"}
               />
             ))}
           </div>
@@ -415,14 +392,6 @@ export function ReportContent({
         </div>
       )}
 
-      {/* Read-only notice */}
-      {isReadOnly && packages.length > 0 && (
-        <div className="bg-info/10 border border-info/30 rounded-xl p-3 text-xs text-info">
-          You're viewing someone else's account. Deletions will be queued as
-          drafts and need signing at the end.
-        </div>
-      )}
-
       {/* Summary line */}
       {packages.length > 0 ? (
         <div className="flex items-center gap-2 text-success">
@@ -431,9 +400,9 @@ export function ReportContent({
           </svg>
           <p className="text-sm font-medium">
             {packages.length} key package{packages.length !== 1 ? "s" : ""} found
-            {deletedIds.size > 0 && (
+            {queuedIds.size > 0 && (
               <span className="text-base-content/50 font-normal">
-                {" "}· {deletedIds.size} deleted
+                {" "}· {queuedIds.size} queued for deletion
               </span>
             )}
           </p>
@@ -450,39 +419,24 @@ export function ReportContent({
               key={pkg.id}
               pkg={pkg}
               onDelete={handleToggleQueue}
-              deleteState={deletedIds.has(pkg.id) ? "done" : queuedIds.has(pkg.id) ? "pending" : "idle"}
+              deleteState={queuedIds.has(pkg.id) ? "pending" : "idle"}
             />
           ))}
         </div>
       )}
 
-      {/* Batch delete action */}
-      {queuedIds.size > 0 && publishState !== "done" && (
-        <div className="flex flex-col gap-2">
-          <button
-            className="btn btn-error btn-sm w-full"
-            onClick={handlePublishDeletions}
-            disabled={publishState === "publishing"}
-          >
-            {publishState === "publishing" ? (
-              <><span className="loading loading-spinner loading-xs" /> Deleting…</>
-            ) : (
-              `Delete ${queuedIds.size} selected key package${queuedIds.size !== 1 ? "s" : ""}`
-            )}
-          </button>
-          <p className="text-xs text-base-content/40 text-center">
-            This will publish a single NIP-09 deletion event for all selected packages.
-          </p>
-        </div>
-      )}
-
-      {publishError && (
-        <p className="text-xs text-error">{publishError}</p>
+      {/* Queue hint */}
+      {queuedIds.size > 0 && (
+        <p className="text-xs text-base-content/40 text-center">
+          {queuedIds.size} package{queuedIds.size !== 1 ? "s" : ""} will be deleted when you continue — as a single NIP-09 event.
+        </p>
       )}
 
       {!isDoneSection && (
-        <button className="btn btn-primary btn-sm w-full" onClick={onContinue}>
-          Continue
+        <button className="btn btn-primary btn-sm w-full" onClick={handleContinue}>
+          {queuedIds.size > 0
+            ? `Queue ${queuedIds.size} deletion${queuedIds.size !== 1 ? "s" : ""} & Continue`
+            : "Continue"}
         </button>
       )}
     </div>
