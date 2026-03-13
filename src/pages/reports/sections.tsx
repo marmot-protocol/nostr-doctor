@@ -27,6 +27,12 @@ import { ReportContent as MetadataBroadcastContent } from "./metadata-broadcast/
 import { createLoader as createSearchRelayNip50Loader } from "./search-relay-nip50/loader.ts";
 import { ReportContent as SearchRelayNip50Content } from "./search-relay-nip50/page.tsx";
 
+import { createLoader as createKeyPackageRelaysLoader } from "./key-package-relays/loader.ts";
+import { ReportContent as KeyPackageRelaysContent } from "./key-package-relays/page.tsx";
+
+import { createLoader as createKeyPackagesLoader } from "./key-packages/loader.ts";
+import { ReportContent as KeyPackagesContent } from "./key-packages/page.tsx";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
   {
@@ -70,6 +76,20 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     description: "Checks whether your search relays support NIP-50",
     createLoader: createSearchRelayNip50Loader,
     Component: SearchRelayNip50Content,
+  },
+  {
+    name: "key-package-relays",
+    label: "Key Package Relays",
+    description: "Checks your kind:10051 key package relay list and relay connectivity",
+    createLoader: createKeyPackageRelaysLoader,
+    Component: KeyPackageRelaysContent,
+  },
+  {
+    name: "key-packages",
+    label: "Key Packages",
+    description: "Looks for MLS key packages (kind:443) across your key package relays",
+    createLoader: createKeyPackagesLoader,
+    Component: KeyPackagesContent,
   },
 ];
 
