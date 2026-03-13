@@ -11,13 +11,11 @@ import { manager } from "./lib/accounts.ts";
 import { factory } from "./lib/factory.ts";
 import { eventStore } from "./lib/store.ts";
 import { subjectPubkey$ } from "./lib/subjectPubkey.ts";
-import { REPORT_PAGE_BASE, pagePath } from "./lib/routing.ts";
-import ReportErrorBoundary from "./components/ReportErrorBoundary.tsx";
+import { REPORT_PAGE_BASE } from "./lib/routing.ts";
 import CompleteView from "./pages/complete/index.tsx";
 import CompleteReferralView from "./pages/complete/ReferralView.tsx";
 import ReferralView from "./pages/ref/index.tsx";
-import ReportsIndex from "./pages/reports/index.tsx";
-import REPORTS from "./pages/reports.tsx";
+import ReportAccordionPage from "./pages/reports/ReportAccordion.tsx";
 import SignInLayout from "./pages/signin/SignInLayout.tsx";
 import {
   SignInBunkerPage,
@@ -29,8 +27,6 @@ import StepPubkey from "./pages/signin/StepPubkey.tsx";
 
 // ---------------------------------------------------------------------------
 // Route guard: redirect to root if no subject pubkey is set.
-// Reads subjectPubkey$ directly — no context dependency, works anywhere
-// in the tree regardless of whether ReportProvider is mounted above it.
 // ---------------------------------------------------------------------------
 function RequireSubject({ children }: { children: React.ReactNode }) {
   const subjectPubkey = use$(subjectPubkey$);
@@ -68,11 +64,10 @@ function CompleteShell({ children }: { children: React.ReactNode }) {
 
 // ---------------------------------------------------------------------------
 // Layout route that mounts ReportProvider around all report + complete pages.
-// Uses <Outlet> so React Router renders the matched child route inside it.
 // ---------------------------------------------------------------------------
 function ReportLayout() {
   return (
-    <ReportProvider pages={REPORTS}>
+    <ReportProvider pages={[]}>
       <Outlet />
     </ReportProvider>
   );
@@ -84,7 +79,7 @@ function ReportLayout() {
 function AppRoutes() {
   return (
     <Routes>
-      {/* Sign-in flow — no ReportProvider needed */}
+      {/* Sign-in flow */}
       <Route element={<SignInLayout />}>
         <Route index element={<StepPubkey />} />
         <Route path="signin" element={<SignInMethods />} />
@@ -93,39 +88,24 @@ function AppRoutes() {
         <Route path="signin/bunker" element={<SignInBunkerPage />} />
       </Route>
 
-      {/* Referral link consumption — fully self-contained, no ReportProvider */}
+      {/* Referral link consumption — fully self-contained */}
       <Route path="ref/:sha256" element={<ReferralView />} />
 
-      {/* Report flow + complete — wrapped in ReportProvider via ReportLayout */}
+      {/* Report flow + complete — wrapped in ReportProvider */}
       <Route element={<ReportLayout />}>
-        {/* /r index — redirects to first report */}
+        {/* Single accordion page — all checks on one page */}
         <Route
           path={REPORT_PAGE_BASE}
           element={
             <RequireSubject>
-              <ReportsIndex />
+              <Suspense fallback={<PageFallback />}>
+                <ReportAccordionPage />
+              </Suspense>
             </RequireSubject>
           }
         />
 
-        {/* Diagnostic report pages */}
-        {REPORTS.map(({ name, Component }) => (
-          <Route
-            key={name}
-            path={pagePath(name)}
-            element={
-              <RequireSubject>
-                <Suspense fallback={<PageFallback />}>
-                  <ReportErrorBoundary reportName={name}>
-                    <Component />
-                  </ReportErrorBoundary>
-                </Suspense>
-              </RequireSubject>
-            }
-          />
-        ))}
-
-        {/* Complete view — terminal destination after all reports */}
+        {/* Complete view */}
         <Route
           path="complete"
           element={
@@ -137,7 +117,7 @@ function AppRoutes() {
           }
         />
 
-        {/* Referral link creation — cross-user helper flow */}
+        {/* Referral link creation */}
         <Route
           path="complete/referral"
           element={

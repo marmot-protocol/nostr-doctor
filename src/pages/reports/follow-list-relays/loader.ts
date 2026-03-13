@@ -13,8 +13,8 @@
 import type { User } from "applesauce-common/casts";
 import type { NostrEvent } from "applesauce-core/helpers";
 import { of, shareReplay, type Observable } from "rxjs";
-import { catchError, last, map } from "rxjs/operators";
-import { eventLoader } from "../../../lib/store.ts";
+import { catchError, map, takeWhile } from "rxjs/operators";
+import { eventStore } from "../../../lib/store.ts";
 
 // ---------------------------------------------------------------------------
 // State type
@@ -57,13 +57,19 @@ function parseEmbeddedRelays(content: string): string[] | null {
 // ---------------------------------------------------------------------------
 
 export function createLoader(user: User): Observable<FollowListRelaysState> {
-  return eventLoader({ kind: 3, pubkey: user.pubkey }).pipe(
-    last(null, null as NostrEvent | null), // take the last event before EOSE, or null
-    map((event) => ({
-      event,
-      embeddedRelays: event ? parseEmbeddedRelays(event.content) : null, // extract relay URLs from content JSON
+  // eventStore.replaceable() emits immediately (undefined on cache-miss, then
+  // the event when it arrives from the network via the store's eventLoader).
+  // This ensures toLoaderState() always receives at least one emission before
+  // the page's takeUntil deadline fires, so the loader never hangs.
+  return eventStore.replaceable(3, user.pubkey).pipe(
+    // Complete as soon as the event arrives (inclusive) so toLoaderState()
+    // marks the section done without waiting for the 10 s page timeout.
+    takeWhile((event) => event === undefined, true),
+    map((event: NostrEvent | undefined) => ({
+      event: event ?? null,
+      embeddedRelays: event ? parseEmbeddedRelays(event.content) : null,
     })),
-    catchError(() => of({ event: null, embeddedRelays: null })), // map errors to null state
-    shareReplay(1), // prevent re-execution on multiple subscribers
+    catchError(() => of({ event: null, embeddedRelays: null })),
+    shareReplay(1),
   );
 }

@@ -82,9 +82,11 @@ function PublishDraftsCard({ draftEvents }: { draftEvents: NostrEvent[] }) {
 
 function SelfView({
   draftEvents,
+  hasSkippedIssues,
   onStartOver,
 }: {
   draftEvents: NostrEvent[];
+  hasSkippedIssues: boolean;
   onStartOver: () => void;
 }) {
   const hasDrafts = draftEvents.length > 0;
@@ -97,12 +99,30 @@ function SelfView({
     <>
       <CompleteHeader subtitle={subtitle} />
 
-      {!hasDrafts && (
+      {!hasDrafts && !hasSkippedIssues && (
         <SuccessBadge>
           <p className="text-sm text-base-content/70">
             No changes were needed — your profile looks healthy.
           </p>
         </SuccessBadge>
+      )}
+
+      {!hasDrafts && hasSkippedIssues && (
+        <div className="bg-warning/10 border border-warning/30 rounded-xl p-5 flex flex-col gap-2">
+          <p className="text-sm font-medium text-base-content">
+            Suggested changes were skipped
+          </p>
+          <p className="text-sm text-base-content/60">
+            Some issues were found during the diagnostic but no fixes were
+            selected. Go back to review and apply the suggested changes.
+          </p>
+          <button
+            className="btn btn-warning btn-sm mt-1 self-start"
+            onClick={() => window.history.back()}
+          >
+            Go back
+          </button>
+        </div>
       )}
 
       {hasDrafts && <PublishDraftsCard draftEvents={draftEvents} />}

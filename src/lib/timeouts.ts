@@ -47,6 +47,7 @@ export const BROADCAST_TIMEOUT_MS = 25_000;
 
 /**
  * Delay before auto-advancing to the next report after an all-clear result
- * or a successful publish. Gives the user a moment to see the success state.
+ * or a successful publish. Gives the user enough time to read what was checked
+ * and why it matters before moving on.
  */
-export const AUTO_ADVANCE_MS = 1_500;
+export const AUTO_ADVANCE_MS = 3_000;

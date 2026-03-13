@@ -13,19 +13,47 @@ import { CompleteHeader, SuccessBadge } from "./_shared.tsx";
 
 function ReadOnlyView({
   draftEvents,
+  hasSkippedIssues,
   onStartOver,
 }: {
   draftEvents: NostrEvent[];
+  hasSkippedIssues: boolean;
   onStartOver: () => void;
 }) {
   const navigate = useNavigate();
   const hasDrafts = draftEvents.length > 0;
 
-  if (!hasDrafts) {
+  if (!hasDrafts && !hasSkippedIssues) {
     return (
       <>
         <CompleteHeader subtitle="No changes were needed — your profile looks healthy." />
         <SuccessBadge />
+        <button className="btn btn-outline w-full" onClick={onStartOver}>
+          Start over
+        </button>
+      </>
+    );
+  }
+
+  if (!hasDrafts && hasSkippedIssues) {
+    return (
+      <>
+        <CompleteHeader subtitle="Your diagnostic is complete." />
+        <div className="bg-warning/10 border border-warning/30 rounded-xl p-5 flex flex-col gap-2">
+          <p className="text-sm font-medium text-base-content">
+            Suggested changes were skipped
+          </p>
+          <p className="text-sm text-base-content/60">
+            Some issues were found during the diagnostic but no fixes were
+            selected. Go back to review and apply the suggested changes.
+          </p>
+          <button
+            className="btn btn-warning btn-sm mt-1 self-start"
+            onClick={() => window.history.back()}
+          >
+            Go back
+          </button>
+        </div>
         <button className="btn btn-outline w-full" onClick={onStartOver}>
           Start over
         </button>

@@ -6,11 +6,13 @@ import {
   getProfilePicture,
 } from "applesauce-core/helpers";
 import { isNip05, queryProfile } from "nostr-tools/nip05";
+import { npubEncode } from "nostr-tools/nip19";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { getSafeRedirect, REPORT_PAGE_BASE } from "../../lib/routing.ts";
 import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
 import { primal } from "../../lib/primal.ts";
+import { eventLoader, eventStore } from "../../lib/store.ts";
 
 type SearchResult = {
   pubkey: string;
@@ -47,6 +49,7 @@ function ResultItem({
     <button
       type="button"
       className="flex items-center gap-3 w-full px-4 py-3 hover:bg-base-200 active:bg-base-300 transition-colors text-left"
+      onMouseDown={(e) => e.preventDefault()}
       onClick={() => onSelect(result.pubkey)}
     >
       <img
@@ -63,7 +66,7 @@ function ResultItem({
           {name}
         </div>
         <div className="text-xs text-base-content/40 font-mono truncate">
-          {result.pubkey.slice(0, 16)}…
+          {npubEncode(result.pubkey)}
         </div>
       </div>
     </button>
@@ -80,8 +83,30 @@ function StepPubkey() {
   const [mode, setMode] = useState<InputMode>("idle");
   const [error, setError] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [inputFocused, setInputFocused] = useState(true);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  // Set to true after a result is selected — prevents the value-change effect
+  // from firing a redundant Primal search when we set the display name.
+  const resultSelectedRef = useRef(false);
+  const prefetchedRef = useRef<string | null>(null);
+
+  /**
+   * Eagerly fetch kind:0 and kind:10002 for a pubkey so they land in the
+   * event store before the accordion page mounts. Each eventLoader call is
+   * fire-and-forget — we subscribe once and immediately unsubscribe; the
+   * address loader's batchLoader will still complete the request and add the
+   * event to the store via filterDuplicateEvents / mapEventsToStore.
+   */
+  function prefetchForPubkey(pubkey: string) {
+    if (prefetchedRef.current === pubkey) return;
+    prefetchedRef.current = pubkey;
+    // kind:0 — profile metadata (first section, must load fast)
+    eventLoader({ kind: 0, pubkey }).subscribe();
+    // kind:10002 — relay list (outboxes used by every other loader)
+    eventLoader({ kind: 10002, pubkey }).subscribe();
+  }
 
   /** Commit subject and navigate — only on explicit user action (button click). */
   function handleContinue() {
@@ -95,6 +120,11 @@ function StepPubkey() {
   useEffect(() => {
     const trimmed = value.trim();
     if (!trimmed || isDirectIdentifier(trimmed)) return;
+    // Skip search if a result was just selected — value was set to display name
+    if (resultSelectedRef.current) {
+      resultSelectedRef.current = false;
+      return;
+    }
 
     debounceRef.current = setTimeout(async () => {
       if (isNip05(trimmed)) {
@@ -102,6 +132,7 @@ function StepPubkey() {
         try {
           const pointer = await queryProfile(trimmed);
           if (pointer) {
+            prefetchForPubkey(pointer.pubkey);
             setResolvedPubkey(pointer.pubkey);
             setMode("idle");
           } else {
@@ -118,6 +149,9 @@ function StepPubkey() {
         setMode("searching");
         try {
           const events = await primal.userSearch(trimmed, 8);
+          // Seed the event store with search results so the profile-metadata
+          // loader gets an immediate cache hit instead of going to relays cold.
+          for (const e of events) eventStore.add(e);
           const results: SearchResult[] = events
             .filter((e) => e.kind === 0)
             .map((e) => ({ pubkey: e.pubkey, event: e }));
@@ -152,6 +186,7 @@ function StepPubkey() {
     if (isDirectIdentifier(trimmed)) {
       const pointer = decodeProfilePointer(trimmed);
       if (pointer) {
+        prefetchForPubkey(pointer.pubkey);
         setResolvedPubkey(pointer.pubkey);
         setMode("idle");
       } else {
@@ -166,10 +201,12 @@ function StepPubkey() {
     const result = searchResults.find((r) => r.pubkey === pubkey);
     if (result) {
       const profile = getProfileContent(result.event);
+      resultSelectedRef.current = true;
       setValue(getDisplayName(profile, pubkey.slice(0, 8)));
     }
-    setSearchResults([]);
+    prefetchForPubkey(pubkey);
     setResolvedPubkey(pubkey);
+    inputRef.current?.blur();
   }
 
   const isLoading = mode === "resolving" || mode === "searching";
@@ -188,6 +225,7 @@ function StepPubkey() {
       <div className="flex flex-col gap-3">
         <div className="relative">
           <input
+            ref={inputRef}
             type="text"
             className={[
               "input input-bordered w-full pr-10 font-mono text-sm",
@@ -198,6 +236,11 @@ function StepPubkey() {
             placeholder="npub1… or search by name"
             value={value}
             onChange={(e) => handleChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && resolvedPubkey) handleContinue();
+            }}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             autoFocus
             spellCheck={false}
             autoComplete="off"
@@ -210,7 +253,7 @@ function StepPubkey() {
           </div>
         </div>
 
-        {searchResults.length > 0 && (
+        {inputFocused && searchResults.length > 0 && (
           <div className="flex flex-col divide-y divide-base-300 rounded-xl border border-base-300 overflow-hidden">
             {searchResults.map((result) => (
               <ResultItem

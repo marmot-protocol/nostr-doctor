@@ -1,28 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import type { NostrEvent } from "applesauce-core/helpers";
 import { use$ } from "applesauce-react/hooks";
-import { timer } from "rxjs";
-import { takeUntil } from "rxjs/operators";
-import { toLoaderState } from "../../../observable/operator/to-loader-state.ts";
-import { useReport } from "../../../context/ReportContext.tsx";
 import { pool } from "../../../lib/relay.ts";
-import {
-  AUTO_ADVANCE_MS,
-  BROADCAST_TIMEOUT_MS,
-  EVENT_LOAD_TIMEOUT_MS,
-} from "../../../lib/timeouts.ts";
-import { createLoader, METADATA_KINDS } from "./loader.ts";
+import { BROADCAST_TIMEOUT_MS } from "../../../lib/timeouts.ts";
+import type { SectionProps } from "../accordion-types.ts";
+import { METADATA_KINDS } from "./loader.ts";
 import type { MetadataBroadcastState } from "./loader.ts";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type KindEntry = {
-  kind: number;
-  label: string;
-  description: string;
-};
+type KindEntry = { kind: number; label: string; description: string };
 
 const METADATA_KIND_ENTRIES: KindEntry[] = [
   { kind: 0, label: "profile", description: "User Metadata (kind:0)" },
@@ -70,7 +59,7 @@ function KindBadge({
       </span>
     );
   }
-  if (event !== undefined) {
+  if (event !== undefined)
     return (
       <span
         className="badge badge-success badge-xs shrink-0"
@@ -79,7 +68,6 @@ function KindBadge({
         {kindEntry.label}
       </span>
     );
-  }
   return (
     <span
       className="badge badge-ghost badge-xs opacity-40 shrink-0"
@@ -91,7 +79,7 @@ function KindBadge({
 }
 
 // ---------------------------------------------------------------------------
-// RelayRow — shows per-relay coverage status
+// RelayRow
 // ---------------------------------------------------------------------------
 
 function RelayRow({
@@ -158,16 +146,6 @@ function RelayRow({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Derive relay check state from loader state
-// A relay is "checking" once it appears in relayKindMap (even with empty Map),
-// "done" once its stream has completed (indicated by its kind count stabilising
-// — we approximate this by treating each relay as "checking" until RELAY_REQUEST_TIMEOUT_MS
-// fires via the page-level takeUntil that completes the loader).
-// Since we can't know per-relay completion from the merged state, we treat
-// all relays as "checking" while !loaderComplete and "done" after.
-// ---------------------------------------------------------------------------
-
 function deriveCheckState(
   url: string,
   relayKindMap: Map<string, Map<number, NostrEvent>>,
@@ -179,28 +157,17 @@ function deriveCheckState(
 }
 
 // ---------------------------------------------------------------------------
-// Main page
+// ReportContent
 // ---------------------------------------------------------------------------
 
-function MetadataBroadcast() {
-  const { subject, next } = useReport();
-
-  // -------------------------------------------------------------------------
-  // Loader — streams MetadataBroadcastState as each relay responds
-  // -------------------------------------------------------------------------
-  const loaderState = use$(
-    () =>
-      subject
-        ? createLoader(subject).pipe(
-            takeUntil(timer(EVENT_LOAD_TIMEOUT_MS)),
-            toLoaderState(),
-          )
-        : undefined,
-    [subject?.pubkey],
-  );
-
+export function ReportContent({
+  loaderState,
+  onDone,
+  onContinue,
+  isDoneSection,
+}: SectionProps<MetadataBroadcastState>) {
   const isLoading = !loaderState?.complete;
-  const state: MetadataBroadcastState | undefined = loaderState?.data;
+  const state = loaderState?.data;
 
   const allRelays = useMemo(() => state?.allRelays ?? [], [state?.allRelays]);
   const relayKindMap = useMemo(
@@ -208,20 +175,15 @@ function MetadataBroadcast() {
     [state?.relayKindMap],
   );
 
-  // -------------------------------------------------------------------------
-  // Derived state
-  // -------------------------------------------------------------------------
   const allRelaysChecked = !isLoading && allRelays.length > 0;
 
-  // Best event per kind across all relays (highest created_at)
   const bestEventsByKind = useMemo<Map<number, NostrEvent>>(() => {
     const result = new Map<number, NostrEvent>();
     for (const kindMap of relayKindMap.values()) {
       for (const [kind, event] of kindMap.entries()) {
         const existing = result.get(kind);
-        if (existing === undefined || event.created_at > existing.created_at) {
+        if (existing === undefined || event.created_at > existing.created_at)
           result.set(kind, event);
-        }
       }
     }
     return result;
@@ -235,17 +197,15 @@ function MetadataBroadcast() {
     });
   }, [allRelaysChecked, allRelays, relayKindMap]);
 
-  // -------------------------------------------------------------------------
-  // Broadcast
-  // -------------------------------------------------------------------------
   const [broadcasting, setBroadcasting] = useState(false);
   const [done, setDone] = useState(false);
   const [broadcastError, setBroadcastError] = useState<string | null>(null);
   const [publishProgress, setPublishProgress] = useState(0);
+  const [advanced, setAdvanced] = useState(false);
 
   function handleBroadcast() {
     if (bestEventsByKind.size === 0) {
-      next();
+      onDone({ status: "skipped", summary: "Nothing to broadcast" });
       return;
     }
     setBroadcasting(true);
@@ -262,292 +222,278 @@ function MetadataBroadcast() {
         setBroadcasting(false);
       }
     }
-    for (const event of events) {
+    for (const event of events)
       pool.publish(allRelays, event).then(onSettled).catch(onSettled);
-    }
   }
 
   useEffect(() => {
     if (!broadcasting) return;
     const t = setTimeout(() => {
       setBroadcasting(false);
-      next();
+      onDone({ status: "fixed", summary: "Broadcast timed out — partial" });
     }, BROADCAST_TIMEOUT_MS);
     return () => clearTimeout(t);
-  }, [broadcasting, next]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broadcasting]);
 
   useEffect(() => {
     if (done) {
-      const t = setTimeout(() => next(), AUTO_ADVANCE_MS);
-      return () => clearTimeout(t);
+      onDone({
+        status: "fixed",
+        summary: `${bestEventsByKind.size} event${bestEventsByKind.size !== 1 ? "s" : ""} broadcast to ${allRelays.length} relay${allRelays.length !== 1 ? "s" : ""}`,
+      });
     }
-  }, [done, next]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done]);
 
   useEffect(() => {
-    if (allKindsPresentEverywhere) {
-      const t = setTimeout(() => next(), AUTO_ADVANCE_MS);
-      return () => clearTimeout(t);
+    if (allKindsPresentEverywhere && !advanced) {
+      setAdvanced(true);
+      onDone({
+        status: "clean",
+        summary: `All metadata on all ${allRelays.length} relay${allRelays.length !== 1 ? "s" : ""}`,
+      });
     }
-  }, [allKindsPresentEverywhere, next]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allKindsPresentEverywhere]);
 
-  // -------------------------------------------------------------------------
-  // Loading — show partial relay rows as they stream in
-  // -------------------------------------------------------------------------
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
-            <div className="flex items-center gap-4">
-              <span className="loading loading-spinner loading-lg text-primary shrink-0" />
-              <div>
-                <h1 className="text-lg font-semibold text-base-content">
-                  Metadata Broadcast
-                </h1>
-                <p className="text-sm text-base-content/60">
-                  {allRelays.length > 0
-                    ? `Checking ${allRelays.length} relays…`
-                    : "Loading relay list…"}
-                </p>
-              </div>
-            </div>
-
-            {/* Show relay rows as they stream in during loading */}
-            {allRelays.length > 0 && (
-              <div className="flex flex-col gap-3 max-h-80 overflow-y-auto">
-                {allRelays.map((url) => (
-                  <RelayRow
-                    key={url}
-                    relayUrl={url}
-                    kindMap={relayKindMap.get(url)}
-                    checkState={deriveCheckState(url, relayKindMap, false)}
-                  />
-                ))}
-              </div>
-            )}
-
-            <button className="btn btn-ghost btn-sm w-full" onClick={next}>
-              Skip
-            </button>
-          </div>
+      <div className="flex flex-col gap-3 py-2">
+        <div className="flex items-center gap-4">
+          <span className="loading loading-spinner loading-sm text-primary shrink-0" />
+          <p className="text-sm text-base-content/60">
+            {allRelays.length > 0
+              ? `Checking ${allRelays.length} relays…`
+              : "Loading relay list…"}
+          </p>
         </div>
-      </div>
-    );
-  }
-
-  // All-clear (auto-advancing)
-  if (allKindsPresentEverywhere) {
-    return (
-      <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6 items-center">
-            <div className="size-16 rounded-full bg-success/10 flex items-center justify-center">
-              <svg
-                className="size-8 text-success"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-            </div>
-            <div className="text-center">
-              <h2 className="text-lg font-semibold text-base-content">
-                Metadata fully propagated
-              </h2>
-              <p className="text-sm text-base-content/60 mt-1">
-                All metadata events are already present on every checked relay.
-              </p>
-            </div>
-            <span className="loading loading-dots loading-sm text-base-content/40" />
-            <button className="btn btn-ghost btn-sm" onClick={next}>
-              Next
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Broadcasting
-  if (broadcasting && bestEventsByKind.size > 0) {
-    const total = bestEventsByKind.size;
-    return (
-      <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6 items-center">
-            <span className="loading loading-spinner loading-lg text-primary" />
-            <div className="text-center w-full">
-              <h2 className="text-lg font-semibold text-base-content">
-                Broadcasting metadata…
-              </h2>
-              <p className="text-sm text-base-content/60 mt-1">
-                {publishProgress} of {total} {total === 1 ? "event" : "events"}{" "}
-                published
-              </p>
-            </div>
-            <progress
-              className="progress progress-primary w-full"
-              value={publishProgress}
-              max={total}
-            />
-            <p className="text-xs text-base-content/40">
-              This may take a moment. You can skip to continue.
-            </p>
-            <button className="btn btn-ghost btn-sm" onClick={next}>
-              Skip
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Done
-  if (done) {
-    return (
-      <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6 items-center">
-            <div className="size-16 rounded-full bg-success/10 flex items-center justify-center">
-              <svg
-                className="size-8 text-success"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-            </div>
-            <div className="text-center">
-              <h2 className="text-lg font-semibold text-base-content">
-                Broadcast complete
-              </h2>
-              <p className="text-sm text-base-content/60 mt-1">
-                {bestEventsByKind.size}{" "}
-                {bestEventsByKind.size === 1 ? "event" : "events"} published to{" "}
-                {allRelays.length} {allRelays.length === 1 ? "relay" : "relays"}
-                .
-              </p>
-            </div>
-            <span className="loading loading-dots loading-sm text-base-content/40" />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Main view
-  const doneCount = allRelays.filter(
-    (url) => deriveCheckState(url, relayKindMap, true) === "done",
-  ).length;
-
-  return (
-    <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
-          <div>
-            <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
-              Metadata Broadcast
-            </p>
-            <h1 className="text-2xl font-semibold text-base-content">
-              Relay Coverage
-            </h1>
-            <p className="text-sm text-base-content/60 mt-1">
-              Checking {allRelays.length}{" "}
-              {allRelays.length === 1 ? "relay" : "relays"} for your metadata
-              events.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <div className="flex justify-between text-xs text-base-content/40">
-              <span>
-                {doneCount} / {allRelays.length} checked
-              </span>
-            </div>
-            <progress
-              className="progress progress-primary w-full"
-              value={doneCount}
-              max={allRelays.length}
-            />
-          </div>
-
-          <div className="flex flex-col gap-3 max-h-96 overflow-y-auto">
+        {allRelays.length > 0 && (
+          <div className="flex flex-col gap-3 max-h-80 overflow-y-auto">
             {allRelays.map((url) => (
               <RelayRow
                 key={url}
                 relayUrl={url}
                 kindMap={relayKindMap.get(url)}
-                checkState={deriveCheckState(url, relayKindMap, true)}
+                checkState={deriveCheckState(url, relayKindMap, false)}
               />
             ))}
           </div>
+        )}
+        {!isDoneSection && (
+          <button
+            className="btn btn-ghost btn-sm w-full"
+            onClick={() => {
+              onDone({ status: "skipped", summary: "Skipped" });
+              onContinue();
+            }}
+          >
+            Skip
+          </button>
+        )}
+      </div>
+    );
+  }
 
-          {bestEventsByKind.size > 0 && (
-            <div className="bg-base-200/60 rounded-xl p-3 text-sm text-base-content/70">
-              Found{" "}
-              <span className="font-medium text-base-content">
-                {bestEventsByKind.size} metadata{" "}
-                {bestEventsByKind.size === 1 ? "event" : "events"}
-              </span>{" "}
-              across {allRelays.length}{" "}
-              {allRelays.length === 1 ? "relay" : "relays"}. Broadcasting will
-              push {bestEventsByKind.size === 1 ? "it" : "them"} to every relay.
-            </div>
-          )}
-
-          {bestEventsByKind.size === 0 && (
-            <div className="bg-warning/10 border border-warning/30 rounded-xl p-3 text-sm text-warning">
-              No metadata events were found on any of the checked relays.
-            </div>
-          )}
-
-          {broadcastError && (
-            <div className="bg-error/10 border border-error/30 rounded-xl p-3 text-xs text-error">
-              {broadcastError}
-            </div>
-          )}
-
-          <div className="flex flex-col gap-2">
-            <button
-              className="btn btn-primary w-full"
-              onClick={handleBroadcast}
-              disabled={broadcasting || bestEventsByKind.size === 0}
-            >
-              {broadcasting ? (
-                <>
-                  <span className="loading loading-spinner loading-xs" />
-                  Broadcasting…
-                </>
-              ) : bestEventsByKind.size === 0 ? (
-                "Nothing to broadcast"
-              ) : (
-                `Broadcast ${bestEventsByKind.size} ${bestEventsByKind.size === 1 ? "event" : "events"} to ${allRelays.length} relays`
-              )}
-            </button>
-            <button
-              className="btn btn-ghost btn-sm w-full"
-              onClick={next}
-              disabled={broadcasting}
-            >
-              Skip
-            </button>
-          </div>
+  if (broadcasting) {
+    const total = bestEventsByKind.size;
+    return (
+      <div className="flex flex-col gap-3 py-2">
+        <div className="flex items-center gap-3">
+          <span className="loading loading-spinner loading-sm text-primary" />
+          <p className="text-sm text-base-content/60">
+            {publishProgress} / {total} events published…
+          </p>
         </div>
+        <progress
+          className="progress progress-primary w-full"
+          value={publishProgress}
+          max={total}
+        />
+        {!isDoneSection && (
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              onDone({ status: "skipped", summary: "Broadcast skipped" });
+              onContinue();
+            }}
+          >
+            Skip
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (done) {
+    return (
+      <div className="flex flex-col gap-4 py-2">
+        <div className="flex items-center gap-2 text-success">
+          <svg
+            className="size-4 shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+          <p className="text-sm font-medium">Broadcast complete</p>
+        </div>
+        <div className="flex flex-col gap-3 max-h-80 overflow-y-auto">
+          {allRelays.map((url) => (
+            <RelayRow
+              key={url}
+              relayUrl={url}
+              kindMap={relayKindMap.get(url)}
+              checkState="done"
+            />
+          ))}
+        </div>
+        {!isDoneSection && (
+          <button
+            className="btn btn-primary btn-sm w-full"
+            onClick={onContinue}
+          >
+            Continue
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // All-clear — show relay coverage grid for review
+  if (allKindsPresentEverywhere) {
+    return (
+      <div className="flex flex-col gap-3 py-2">
+        <div className="flex items-center gap-2 text-success">
+          <svg
+            className="size-4 shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+          <p className="text-sm font-medium">Metadata fully propagated</p>
+        </div>
+        <p className="text-xs text-base-content/40">
+          All metadata events are present on every checked relay.
+        </p>
+        <div className="flex flex-col gap-3 max-h-80 overflow-y-auto mt-1">
+          {allRelays.map((url) => (
+            <RelayRow
+              key={url}
+              relayUrl={url}
+              kindMap={relayKindMap.get(url)}
+              checkState="done"
+            />
+          ))}
+        </div>
+        {!isDoneSection && (
+          <button
+            className="btn btn-primary btn-sm w-full"
+            onClick={onContinue}
+          >
+            Continue
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const doneCount = allRelays.filter(
+    (url) => deriveCheckState(url, relayKindMap, true) === "done",
+  ).length;
+
+  return (
+    <div className="flex flex-col gap-4 py-2">
+      <p className="text-sm text-base-content/70">
+        Checking {allRelays.length}{" "}
+        {allRelays.length === 1 ? "relay" : "relays"} for your metadata events.
+        Clients need your metadata on every relay they discover you through.
+      </p>
+      <div className="flex flex-col gap-1">
+        <div className="flex justify-between text-xs text-base-content/40">
+          <span>
+            {doneCount} / {allRelays.length} checked
+          </span>
+        </div>
+        <progress
+          className="progress progress-primary w-full"
+          value={doneCount}
+          max={allRelays.length}
+        />
+      </div>
+      <div className="flex flex-col gap-3 max-h-80 overflow-y-auto">
+        {allRelays.map((url) => (
+          <RelayRow
+            key={url}
+            relayUrl={url}
+            kindMap={relayKindMap.get(url)}
+            checkState={deriveCheckState(url, relayKindMap, true)}
+          />
+        ))}
+      </div>
+      {bestEventsByKind.size > 0 && (
+        <div className="bg-base-200/60 rounded-xl p-3 text-sm text-base-content/70">
+          Found{" "}
+          <span className="font-medium text-base-content">
+            {bestEventsByKind.size} metadata{" "}
+            {bestEventsByKind.size === 1 ? "event" : "events"}
+          </span>{" "}
+          across {allRelays.length}{" "}
+          {allRelays.length === 1 ? "relay" : "relays"}. Broadcasting will push{" "}
+          {bestEventsByKind.size === 1 ? "it" : "them"} to every relay.
+        </div>
+      )}
+      {bestEventsByKind.size === 0 && (
+        <div className="bg-warning/10 border border-warning/30 rounded-xl p-3 text-sm text-warning">
+          No metadata events were found on any of the checked relays.
+        </div>
+      )}
+      {broadcastError && (
+        <div className="bg-error/10 border border-error/30 rounded-xl p-3 text-xs text-error">
+          {broadcastError}
+        </div>
+      )}
+      <div className="flex flex-col gap-2">
+        <button
+          className="btn btn-primary w-full"
+          onClick={handleBroadcast}
+          disabled={broadcasting || bestEventsByKind.size === 0}
+        >
+          {bestEventsByKind.size === 0
+            ? "Nothing to broadcast"
+            : `Broadcast ${bestEventsByKind.size} ${bestEventsByKind.size === 1 ? "event" : "events"} to ${allRelays.length} relays`}
+        </button>
+        {!isDoneSection && (
+          <button
+            className="btn btn-ghost btn-sm w-full"
+            onClick={() => {
+              onDone({
+                status: "skipped",
+                summary: `${allRelays.length} relay${allRelays.length !== 1 ? "s" : ""} checked, not broadcast`,
+              });
+              onContinue();
+            }}
+            disabled={broadcasting}
+          >
+            Skip
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-export default MetadataBroadcast;
+export default ReportContent;

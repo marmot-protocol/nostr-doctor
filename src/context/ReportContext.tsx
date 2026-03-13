@@ -108,6 +108,10 @@ export function ReportProvider({ pages, children }: ReportProviderProps) {
   const account: IAccount | null = activeAccount ?? null;
 
   const next = useCallback(() => {
+    if (pages.length === 0) {
+      navigate("/complete", { replace: true });
+      return;
+    }
     const currentIndex = pages.findIndex(
       (p) => pagePath(p.name) === location.pathname,
     );

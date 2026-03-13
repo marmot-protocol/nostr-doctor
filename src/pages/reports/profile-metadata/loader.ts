@@ -11,8 +11,8 @@
 import type { User } from "applesauce-common/casts";
 import type { NostrEvent } from "applesauce-core/helpers";
 import { of, shareReplay, type Observable } from "rxjs";
-import { catchError, last, map } from "rxjs/operators";
-import { eventLoader } from "../../../lib/store.ts";
+import { catchError, map, takeWhile } from "rxjs/operators";
+import { eventStore } from "../../../lib/store.ts";
 
 // ---------------------------------------------------------------------------
 // Standard kind:0 fields per NIP-01, NIP-24, NIP-05, NIP-57
@@ -65,15 +65,22 @@ function deriveNonStandardFields(
 // ---------------------------------------------------------------------------
 
 export function createLoader(user: User): Observable<ProfileMetadataState> {
-  return eventLoader({ kind: 0, pubkey: user.pubkey }).pipe(
-    last(null, null as NostrEvent | null), // take the last event before EOSE, or null
-    map((event) => ({
-      event,
-      nonStandardFields: deriveNonStandardFields(event), // derive non-standard fields from content
+  // eventStore.replaceable() emits immediately (undefined on cache-miss, then
+  // the event when it arrives from the network via the store's eventLoader).
+  // This ensures toLoaderState() always receives at least one emission before
+  // the page's takeUntil deadline fires, so the loader never hangs.
+  return eventStore.replaceable(0, user.pubkey).pipe(
+    // Complete as soon as the event arrives (inclusive). Without this the
+    // observable never completes on its own and toLoaderState() would stay
+    // at complete:false until the page's takeUntil(timer(10s)) fires.
+    takeWhile((event) => event === undefined, true),
+    map((event: NostrEvent | undefined) => ({
+      event: event ?? null,
+      nonStandardFields: deriveNonStandardFields(event ?? null),
     })),
     catchError(() =>
       of({ event: null, nonStandardFields: [] as [string, unknown][] }),
-    ), // map errors to null state
-    shareReplay(1), // prevent re-execution on multiple subscribers
+    ),
+    shareReplay(1),
   );
 }

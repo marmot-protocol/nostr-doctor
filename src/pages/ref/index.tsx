@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { firstValueFrom } from "rxjs";
 import { getOutboxes } from "applesauce-core/helpers";
 import type { EventTemplate } from "applesauce-core/helpers";
@@ -12,6 +12,8 @@ import {
 import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
 import { manager } from "../../lib/accounts.ts";
 import { pool, DEFAULT_RELAYS, LOOKUP_RELAYS } from "../../lib/relay.ts";
+import doctorLogo from "../../assets/nostr-doctor.webp";
+import Footer from "../../components/Footer.tsx";
 
 // ---------------------------------------------------------------------------
 // Kind label map — human-readable descriptions for common event kinds
@@ -91,6 +93,45 @@ async function resolveOutboxRelays(pubkey: string): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// PageShell — consistent layout wrapping logo + title + card content
+// ---------------------------------------------------------------------------
+
+function PageShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-base-200 py-8 px-4 flex flex-col items-center">
+      <div className="w-full max-w-2xl flex flex-col gap-6 flex-1">
+        {/* Header */}
+        <div className="flex flex-col items-center text-center gap-4">
+          <Link to="/">
+            <img
+              src={doctorLogo}
+              alt="Nostr Doctor logo"
+              className="w-40 h-auto sm:w-44"
+            />
+          </Link>
+          <div>
+            <Link to="/" className="hover:opacity-80 transition-opacity">
+              <h1 className="text-2xl font-semibold text-base-content">
+                nostr.doctor
+              </h1>
+            </Link>
+            <p className="text-sm text-base-content/50 mt-1">
+              Apply a repair kit to your account
+            </p>
+          </div>
+        </div>
+
+        {/* Card */}
+        <div className="bg-base-100 rounded-2xl border border-base-content/15 shadow-md p-8 flex flex-col gap-6">
+          {children}
+        </div>
+      </div>
+      <Footer />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // EventCard — shows kind label + collapsible raw JSON
 // ---------------------------------------------------------------------------
 
@@ -98,7 +139,7 @@ function EventCard({ event }: { event: EventTemplate & { pubkey: string } }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="rounded-xl border border-base-200 overflow-hidden">
+    <div className="rounded-xl border border-base-content/15 overflow-hidden">
       <button
         type="button"
         className="w-full flex items-center justify-between px-4 py-3 hover:bg-base-200/50 transition-colors text-left"
@@ -132,7 +173,7 @@ function EventCard({ event }: { event: EventTemplate & { pubkey: string } }) {
         </svg>
       </button>
       {open && (
-        <div className="px-4 pb-4 border-t border-base-200">
+        <div className="px-4 pb-4 border-t border-base-content/10">
           <pre className="text-xs text-base-content/60 overflow-x-auto mt-3 whitespace-pre-wrap break-all">
             {JSON.stringify(event, null, 2)}
           </pre>
@@ -151,30 +192,21 @@ function ReferralPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  // Read BehaviorSubjects — synchronous, no useEffect race
   const pack = use$(referralPack$);
-  // Derive isSignedIn from manager.active$ — a BehaviorSubject, always current.
-  // We never create ReadonlyAccount, so any active account is a real signer.
   const activeAccount = use$(manager.active$);
   const isSignedIn = activeAccount !== undefined;
 
   const [phase, setPhase] = useState<Phase>(() => {
-    // If we already have the pack cached (returning from sign-in), skip loading
     if (pack && pack.sha256 === sha256) return { name: "summary" };
     return { name: "loading" };
   });
 
-  // ---------------------------------------------------------------------------
-  // Fetch + decode on mount (or when sha256 changes)
-  // Skip if the pack is already cached for this sha256
-  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!sha256) {
       setPhase({ name: "error", message: "No referral hash provided." });
       return;
     }
 
-    // Already have this pack cached — no need to re-fetch
     if (pack && pack.sha256 === sha256) {
       setPhase({ name: "summary" });
       return;
@@ -206,7 +238,6 @@ function ReferralPage() {
 
         if (cancelled) return;
 
-        // Store decoded pack and wire up shared state
         const decoded: DecodedReferralPack = {
           sha256: parsed.sha256,
           subjectPubkey,
@@ -232,17 +263,11 @@ function ReferralPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sha256]);
 
-  // ---------------------------------------------------------------------------
-  // Sign-in redirect — preserves full current URL (path + all query params)
-  // ---------------------------------------------------------------------------
   function handleSignIn() {
     const currentPath = window.location.pathname + window.location.search;
     navigate(`/signin?redirect=${encodeURIComponent(currentPath)}`);
   }
 
-  // ---------------------------------------------------------------------------
-  // Publish
-  // ---------------------------------------------------------------------------
   async function handlePublish() {
     const currentPack = referralPack$.getValue();
     if (!currentPack || !manager.signer) return;
@@ -256,7 +281,6 @@ function ReferralPage() {
         await pool.publish(relays, signed);
       }
 
-      // Clear shared state
       referralPack$.next(null);
       subjectPubkey$.next(null);
 
@@ -270,173 +294,158 @@ function ReferralPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Loading state
+  // Loading
   // ---------------------------------------------------------------------------
   if (phase.name === "loading") {
     return (
-      <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col items-center gap-4">
-            <span className="loading loading-spinner loading-lg text-primary" />
-            <div className="text-center">
-              <p className="text-sm font-medium text-base-content">
-                Loading referral…
-              </p>
-              <p className="text-xs text-base-content/50 mt-1">
-                Fetching your repair kit from Blossom
-              </p>
-            </div>
+      <PageShell>
+        <div className="flex flex-col items-center gap-4 py-4">
+          <span className="loading loading-spinner loading-lg text-primary" />
+          <div className="text-center">
+            <p className="text-sm font-medium text-base-content">
+              Loading referral…
+            </p>
+            <p className="text-xs text-base-content/50 mt-1">
+              Fetching your repair kit from Blossom
+            </p>
           </div>
         </div>
-      </div>
+      </PageShell>
     );
   }
 
   // ---------------------------------------------------------------------------
-  // Error state
+  // Error
   // ---------------------------------------------------------------------------
   if (phase.name === "error") {
     return (
-      <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
-            <div>
-              <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
-                Error
-              </p>
-              <h1 className="text-2xl font-semibold text-base-content">
-                Could not load referral
-              </h1>
-              <p className="text-sm text-base-content/60 mt-1">
-                The referral link may be expired, corrupted, or the server is
-                unreachable.
-              </p>
-            </div>
-            <div className="bg-error/10 border border-error/30 rounded-xl p-4">
-              <p className="text-xs text-error font-mono whitespace-pre-wrap break-words">
-                {phase.message}
-              </p>
-            </div>
-            <button
-              className="btn btn-outline w-full"
-              onClick={() => navigate("/", { replace: true })}
-            >
-              Back to start
-            </button>
-          </div>
+      <PageShell>
+        <div>
+          <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
+            Error
+          </p>
+          <h2 className="text-xl font-semibold text-base-content">
+            Could not load referral
+          </h2>
+          <p className="text-sm text-base-content/60 mt-1">
+            The referral link may be expired, corrupted, or the server is
+            unreachable.
+          </p>
         </div>
-      </div>
+        <div className="bg-error/10 border border-error/30 rounded-xl p-4">
+          <p className="text-xs text-error font-mono whitespace-pre-wrap break-words">
+            {phase.message}
+          </p>
+        </div>
+        <button
+          className="btn btn-outline w-full"
+          onClick={() => navigate("/", { replace: true })}
+        >
+          Back to start
+        </button>
+      </PageShell>
     );
   }
 
   // ---------------------------------------------------------------------------
-  // Done state
+  // Done
   // ---------------------------------------------------------------------------
   if (phase.name === "done") {
     return (
-      <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6 items-center">
-            <div className="size-16 rounded-full bg-success/10 flex items-center justify-center">
-              <svg
-                className="size-8 text-success"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-            </div>
-            <div className="text-center">
-              <h2 className="text-xl font-semibold text-base-content">
-                Fixes published
-              </h2>
-              <p className="text-sm text-base-content/60 mt-1">
-                All events have been signed and published to your relays.
-              </p>
-            </div>
-            <button
-              className="btn btn-outline w-full"
-              onClick={() => navigate("/", { replace: true })}
+      <PageShell>
+        <div className="flex flex-col items-center gap-4 py-4 text-center">
+          <div className="size-16 rounded-full bg-success/10 flex items-center justify-center">
+            <svg
+              className="size-8 text-success"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
             >
-              Check another account
-            </button>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M5 13l4 4L19 7"
+              />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-base-content">
+              Fixes published
+            </h2>
+            <p className="text-sm text-base-content/60 mt-1">
+              All events have been signed and published to your relays.
+            </p>
           </div>
         </div>
-      </div>
+        <button
+          className="btn btn-outline w-full"
+          onClick={() => navigate("/", { replace: true })}
+        >
+          Check another account
+        </button>
+      </PageShell>
     );
   }
 
   // ---------------------------------------------------------------------------
-  // Summary state — show fix list, sign-in or publish button
-  // pack is guaranteed non-null here (we only reach summary after setting it)
+  // Summary
   // ---------------------------------------------------------------------------
   const currentPack = pack ?? referralPack$.getValue();
   const events = currentPack?.events ?? [];
   const count = events.length;
 
   return (
-    <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="bg-base-100 rounded-2xl border border-base-200 p-8 shadow-sm flex flex-col gap-6">
-          {/* Header */}
-          <div>
-            <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
-              Repair kit
-            </p>
-            <h1 className="text-2xl font-semibold text-base-content">
-              {count} {count === 1 ? "fix" : "fixes"} ready
-            </h1>
-            <p className="text-sm text-base-content/60 mt-1">
-              {isSignedIn
-                ? "Review the fixes below, then publish them to your relays."
-                : "Sign in to review and publish these fixes to your account."}
-            </p>
-          </div>
-
-          {/* Fix list */}
-          <div className="flex flex-col gap-2">
-            {events.map((event, i) => (
-              <EventCard key={i} event={event} />
-            ))}
-          </div>
-
-          {/* Actions */}
-          {!isSignedIn ? (
-            <div className="flex flex-col gap-3">
-              <button className="btn btn-primary w-full" onClick={handleSignIn}>
-                Sign in to publish
-              </button>
-              <p className="text-xs text-base-content/40 text-center">
-                You will be returned here after signing in.
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              <button
-                className="btn btn-primary w-full"
-                onClick={handlePublish}
-                disabled={phase.name === "publishing"}
-              >
-                {phase.name === "publishing" ? (
-                  <>
-                    <span className="loading loading-spinner loading-sm" />
-                    Publishing…
-                  </>
-                ) : (
-                  `Publish ${count} ${count === 1 ? "fix" : "fixes"}`
-                )}
-              </button>
-            </div>
-          )}
-        </div>
+    <PageShell>
+      {/* Header */}
+      <div>
+        <p className="text-xs text-base-content/40 uppercase tracking-widest mb-1">
+          Repair kit
+        </p>
+        <h2 className="text-xl font-semibold text-base-content">
+          {count} {count === 1 ? "fix" : "fixes"} ready
+        </h2>
+        <p className="text-sm text-base-content/60 mt-1">
+          {isSignedIn
+            ? "Review the fixes below, then publish them to your relays."
+            : "Sign in to review and publish these fixes to your account."}
+        </p>
       </div>
-    </div>
+
+      {/* Fix list */}
+      <div className="flex flex-col gap-2">
+        {events.map((event, i) => (
+          <EventCard key={i} event={event} />
+        ))}
+      </div>
+
+      {/* Actions */}
+      {!isSignedIn ? (
+        <div className="flex flex-col gap-3">
+          <button className="btn btn-primary w-full" onClick={handleSignIn}>
+            Sign in to publish
+          </button>
+          <p className="text-xs text-base-content/40 text-center">
+            You will be returned here after signing in.
+          </p>
+        </div>
+      ) : (
+        <button
+          className="btn btn-primary w-full"
+          onClick={handlePublish}
+          disabled={phase.name === "publishing"}
+        >
+          {phase.name === "publishing" ? (
+            <>
+              <span className="loading loading-spinner loading-sm" />
+              Publishing…
+            </>
+          ) : (
+            `Publish ${count} ${count === 1 ? "fix" : "fixes"}`
+          )}
+        </button>
+      )}
+    </PageShell>
   );
 }
 
