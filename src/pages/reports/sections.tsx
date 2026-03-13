@@ -29,18 +29,18 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     Component: ProfileMetadataContent,
   },
   {
-    name: "relay-health",
-    label: "Relay Health",
-    description: "Checks connectivity, NIP-50 search, and DM auth across all your relay lists",
-    createLoader: deadRelaysLoader,
-    Component: DeadRelaysContent,
-  },
-  {
     name: "follow-list-relays",
     label: "Follow List Relays",
     description: "Checks for embedded relay data in your kind:3 follow list",
     createLoader: createFollowListRelaysLoader,
     Component: FollowListRelaysContent,
+  },
+  {
+    name: "relay-health",
+    label: "Relay Health",
+    description: "Checks connectivity, NIP-50 search, and DM auth across all your relay lists",
+    createLoader: deadRelaysLoader,
+    Component: DeadRelaysContent,
   },
   {
     name: "metadata-broadcast",
