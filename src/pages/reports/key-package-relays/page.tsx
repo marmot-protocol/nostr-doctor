@@ -18,8 +18,10 @@ function VerdictBadge({
 }) {
   if (verdict === "offline")
     return <span className="badge badge-error badge-sm">offline</span>;
-  if (verdict === "online" && !isChecking)
+  if (verdict === "online")
     return <span className="badge badge-success badge-sm">online</span>;
+  if (!isChecking)
+    return <span className="badge badge-ghost badge-sm">unknown</span>;
   return (
     <span className="badge badge-ghost badge-sm gap-1">
       <span className="loading loading-spinner loading-xs" />
