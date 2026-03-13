@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { setDeleteEvents } from "applesauce-core/operations/delete";
+import { factory } from "../../../lib/factory.ts";
 import type { SectionProps } from "../accordion-types.ts";
 import type { KeyPackage, KeyPackagesState } from "./loader.ts";
 
@@ -23,23 +25,66 @@ function shortId(id: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// TrashIcon
+// ---------------------------------------------------------------------------
+
+function TrashIcon() {
+  return (
+    <svg
+      className="size-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+      />
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // KeyPackageCard
 // ---------------------------------------------------------------------------
 
-function KeyPackageCard({ pkg }: { pkg: KeyPackage }) {
+function KeyPackageCard({
+  pkg,
+  onDelete,
+  deleteState,
+}: {
+  pkg: KeyPackage;
+  onDelete: (pkg: KeyPackage) => void;
+  deleteState: "idle" | "pending" | "done" | "error";
+}) {
   const [expanded, setExpanded] = useState(false);
 
   const label = pkg.device ?? pkg.client ?? null;
-  const sublabel =
-    pkg.device && pkg.client ? pkg.client : null;
+  const sublabel = pkg.device && pkg.client ? pkg.client : null;
+  const isDeleted = deleteState === "done";
+  const isDeleting = deleteState === "pending";
 
   return (
-    <div className="rounded-xl border border-base-200 bg-base-100 overflow-hidden">
+    <div
+      className={[
+        "rounded-xl border overflow-hidden transition-opacity duration-200",
+        isDeleted
+          ? "border-base-200 bg-base-200/40 opacity-50"
+          : "border-base-200 bg-base-100",
+      ].join(" ")}
+    >
       <div className="p-4 flex items-start gap-3">
         {/* Icon */}
-        <div className="size-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+        <div
+          className={[
+            "size-10 rounded-lg flex items-center justify-center shrink-0 mt-0.5",
+            isDeleted ? "bg-base-200" : "bg-primary/10",
+          ].join(" ")}
+        >
           <svg
-            className="size-5 text-primary"
+            className={["size-5", isDeleted ? "text-base-content/30" : "text-primary"].join(" ")}
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -58,7 +103,7 @@ function KeyPackageCard({ pkg }: { pkg: KeyPackage }) {
           <div className="flex items-start justify-between gap-2 flex-wrap">
             <div className="min-w-0">
               {label ? (
-                <p className="text-sm font-semibold text-base-content truncate">
+                <p className={["text-sm font-semibold truncate", isDeleted ? "line-through text-base-content/40" : "text-base-content"].join(" ")}>
                   {label}
                 </p>
               ) : (
@@ -77,9 +122,7 @@ function KeyPackageCard({ pkg }: { pkg: KeyPackage }) {
 
           <div className="flex flex-wrap gap-2 mt-0.5">
             {pkg.client && (
-              <span className="badge badge-ghost badge-xs">
-                {pkg.client}
-              </span>
+              <span className="badge badge-ghost badge-xs">{pkg.client}</span>
             )}
             {pkg.foundOnRelay && (
               <span
@@ -89,28 +132,51 @@ function KeyPackageCard({ pkg }: { pkg: KeyPackage }) {
                 {new URL(pkg.foundOnRelay).hostname}
               </span>
             )}
+            {isDeleted && (
+              <span className="badge badge-warning badge-xs">deletion queued</span>
+            )}
           </div>
         </div>
 
-        {/* Expand toggle */}
-        <button
-          className="btn btn-ghost btn-xs shrink-0 mt-0.5"
-          onClick={() => setExpanded((v) => !v)}
-          aria-label={expanded ? "Collapse details" : "Expand details"}
-        >
-          <svg
-            className={[
-              "size-4 transition-transform duration-150",
-              expanded ? "rotate-180" : "",
-            ].join(" ")}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
+        {/* Actions */}
+        <div className="flex items-center gap-1 shrink-0 mt-0.5">
+          {/* Delete button */}
+          {!isDeleted && (
+            <button
+              className="btn btn-ghost btn-xs text-error hover:bg-error/10"
+              onClick={() => onDelete(pkg)}
+              disabled={isDeleting}
+              aria-label="Delete key package"
+              title="Delete this key package"
+            >
+              {isDeleting ? (
+                <span className="loading loading-spinner loading-xs" />
+              ) : (
+                <TrashIcon />
+              )}
+            </button>
+          )}
+
+          {/* Expand toggle */}
+          <button
+            className="btn btn-ghost btn-xs"
+            onClick={() => setExpanded((v) => !v)}
+            aria-label={expanded ? "Collapse details" : "Expand details"}
           >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
+            <svg
+              className={[
+                "size-4 transition-transform duration-150",
+                expanded ? "rotate-180" : "",
+              ].join(" ")}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Expanded detail */}
@@ -154,7 +220,9 @@ function KeyPackageCard({ pkg }: { pkg: KeyPackage }) {
                   title={tag.join(" ")}
                 >
                   {tag[0]}
-                  {tag[1] ? `=${tag[1].slice(0, 16)}${tag[1].length > 16 ? "…" : ""}` : ""}
+                  {tag[1]
+                    ? `=${tag[1].slice(0, 16)}${tag[1].length > 16 ? "…" : ""}`
+                    : ""}
                 </span>
               ))}
               {pkg.event.tags.length === 0 && (
@@ -205,28 +273,38 @@ function EmptyState({ hasRelays }: { hasRelays: boolean }) {
 // ReportContent
 // ---------------------------------------------------------------------------
 
+type DeleteState = "idle" | "pending" | "done" | "error";
+
 export function ReportContent({
+  account,
+  publish: publishEvent,
   loaderState,
   onDone,
   onContinue,
   isDoneSection,
 }: SectionProps<KeyPackagesState>) {
+  const isReadOnly = account === null;
   const isLoading = !loaderState?.complete;
   const state = loaderState?.data;
 
   const packages = useMemo(() => state?.packages ?? [], [state?.packages]);
   const keyPackageRelays = state?.keyPackageRelays ?? null;
 
+  // Per-package delete state keyed by event id
+  const [deleteStates, setDeleteStates] = useState<Record<string, DeleteState>>({});
+  const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
   const [reported, setReported] = useState(false);
+
+  const deletedCount = useMemo(
+    () => Object.values(deleteStates).filter((s) => s === "done").length,
+    [deleteStates],
+  );
 
   useEffect(() => {
     if (!isLoading && !reported) {
       setReported(true);
       if (packages.length === 0) {
-        onDone({
-          status: "notfound",
-          summary: "No key packages found",
-        });
+        onDone({ status: "notfound", summary: "No key packages found" });
       } else {
         onDone({
           status: "clean",
@@ -236,6 +314,30 @@ export function ReportContent({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading]);
+
+  async function handleDelete(pkg: KeyPackage) {
+    setDeleteStates((prev) => ({ ...prev, [pkg.id]: "pending" }));
+    setDeleteErrors((prev) => {
+      const next = { ...prev };
+      delete next[pkg.id];
+      return next;
+    });
+    try {
+      // Build a NIP-09 kind:5 deletion event pointing at this key package
+      const draft = await factory.build(
+        { kind: 5 },
+        setDeleteEvents([pkg.event]),
+      );
+      await publishEvent(draft);
+      setDeleteStates((prev) => ({ ...prev, [pkg.id]: "done" }));
+    } catch (e) {
+      setDeleteStates((prev) => ({ ...prev, [pkg.id]: "error" }));
+      setDeleteErrors((prev) => ({
+        ...prev,
+        [pkg.id]: e instanceof Error ? e.message : "Failed to queue deletion.",
+      }));
+    }
+  }
 
   // Loading state
   if (isLoading) {
@@ -252,7 +354,12 @@ export function ReportContent({
         {packages.length > 0 && (
           <div className="flex flex-col gap-3">
             {packages.map((pkg) => (
-              <KeyPackageCard key={pkg.id} pkg={pkg} />
+              <KeyPackageCard
+                key={pkg.id}
+                pkg={pkg}
+                onDelete={handleDelete}
+                deleteState={deleteStates[pkg.id] ?? "idle"}
+              />
             ))}
           </div>
         )}
@@ -295,6 +402,14 @@ export function ReportContent({
         </div>
       )}
 
+      {/* Read-only notice */}
+      {isReadOnly && packages.length > 0 && (
+        <div className="bg-info/10 border border-info/30 rounded-xl p-3 text-xs text-info">
+          You're viewing someone else's account. Deletions will be queued as
+          drafts and need signing at the end.
+        </div>
+      )}
+
       {/* Summary line */}
       {packages.length > 0 ? (
         <div className="flex items-center gap-2 text-success">
@@ -305,14 +420,15 @@ export function ReportContent({
             stroke="currentColor"
             strokeWidth={2.5}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M5 13l4 4L19 7"
-            />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
           <p className="text-sm font-medium">
             {packages.length} key package{packages.length !== 1 ? "s" : ""} found
+            {deletedCount > 0 && (
+              <span className="text-base-content/50 font-normal">
+                {" "}· {deletedCount} deletion{deletedCount !== 1 ? "s" : ""} queued
+              </span>
+            )}
           </p>
         </div>
       ) : (
@@ -323,7 +439,18 @@ export function ReportContent({
       {packages.length > 0 && (
         <div className="flex flex-col gap-3">
           {packages.map((pkg) => (
-            <KeyPackageCard key={pkg.id} pkg={pkg} />
+            <div key={pkg.id}>
+              <KeyPackageCard
+                pkg={pkg}
+                onDelete={handleDelete}
+                deleteState={deleteStates[pkg.id] ?? "idle"}
+              />
+              {deleteErrors[pkg.id] && (
+                <p className="text-xs text-error mt-1 px-1">
+                  {deleteErrors[pkg.id]}
+                </p>
+              )}
+            </div>
           ))}
         </div>
       )}
