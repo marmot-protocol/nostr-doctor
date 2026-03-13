@@ -3,7 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches:
-      - main
+      - master
   workflow_dispatch:
 
 permissions:
@@ -37,7 +37,7 @@ jobs:
       - name: Build
         run: pnpm build
         env:
-          VITE_BASE: /dr-nostr/
+          VITE_BASE: /nostr-doctor/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
