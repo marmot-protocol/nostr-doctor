@@ -64,7 +64,7 @@ function KeyPackageCard({
   const label = pkg.device ?? pkg.client ?? null;
   const sublabel = pkg.device && pkg.client ? pkg.client : null;
   const isDeleted = deleteState === "done";
-  const isDeleting = deleteState === "pending";
+  const isQueued = deleteState === "pending";
 
   return (
     <div
@@ -132,28 +132,29 @@ function KeyPackageCard({
                 {new URL(pkg.foundOnRelay).hostname}
               </span>
             )}
+            {isQueued && (
+              <span className="badge badge-warning badge-xs">queued</span>
+            )}
             {isDeleted && (
-              <span className="badge badge-warning badge-xs">deletion queued</span>
+              <span className="badge badge-error badge-xs">deleted</span>
             )}
           </div>
         </div>
 
         {/* Actions */}
         <div className="flex items-center gap-1 shrink-0 mt-0.5">
-          {/* Delete button */}
+          {/* Trash toggle — queues/dequeues for batch deletion */}
           {!isDeleted && (
             <button
-              className="btn btn-ghost btn-xs text-error hover:bg-error/10"
+              className={[
+                "btn btn-ghost btn-xs",
+                isQueued ? "text-error bg-error/10" : "text-base-content/30 hover:text-error hover:bg-error/10",
+              ].join(" ")}
               onClick={() => onDelete(pkg)}
-              disabled={isDeleting}
-              aria-label="Delete key package"
-              title="Delete this key package"
+              aria-label={isQueued ? "Remove from deletion queue" : "Queue for deletion"}
+              title={isQueued ? "Click to deselect" : "Queue for deletion"}
             >
-              {isDeleting ? (
-                <span className="loading loading-spinner loading-xs" />
-              ) : (
-                <TrashIcon />
-              )}
+              <TrashIcon />
             </button>
           )}
 
@@ -273,8 +274,6 @@ function EmptyState({ hasRelays }: { hasRelays: boolean }) {
 // ReportContent
 // ---------------------------------------------------------------------------
 
-type DeleteState = "idle" | "pending" | "done" | "error";
-
 export function ReportContent({
   account,
   publish: publishEvent,
@@ -290,15 +289,15 @@ export function ReportContent({
   const packages = useMemo(() => state?.packages ?? [], [state?.packages]);
   const keyPackageRelays = state?.keyPackageRelays ?? null;
 
-  // Per-package delete state keyed by event id
-  const [deleteStates, setDeleteStates] = useState<Record<string, DeleteState>>({});
-  const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
-  const [reported, setReported] = useState(false);
+  // Set of package IDs the user has toggled for deletion
+  const [queuedIds, setQueuedIds] = useState<Set<string>>(new Set());
+  // "idle" | "publishing" | "done" | "error"
+  const [publishState, setPublishState] = useState<"idle" | "publishing" | "done" | "error">("idle");
+  const [publishError, setPublishError] = useState<string | null>(null);
+  // IDs that were successfully deleted (to show strikethrough after done)
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
 
-  const deletedCount = useMemo(
-    () => Object.values(deleteStates).filter((s) => s === "done").length,
-    [deleteStates],
-  );
+  const [reported, setReported] = useState(false);
 
   useEffect(() => {
     if (!isLoading && !reported) {
@@ -315,28 +314,42 @@ export function ReportContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading]);
 
-  async function handleDelete(pkg: KeyPackage) {
-    setDeleteStates((prev) => ({ ...prev, [pkg.id]: "pending" }));
-    setDeleteErrors((prev) => {
-      const next = { ...prev };
-      delete next[pkg.id];
+  function handleToggleQueue(pkg: KeyPackage) {
+    setQueuedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(pkg.id)) next.delete(pkg.id);
+      else next.add(pkg.id);
       return next;
     });
+  }
+
+  async function handlePublishDeletions() {
+    const toDelete = packages.filter((p) => queuedIds.has(p.id) && !deletedIds.has(p.id));
+    if (toDelete.length === 0) return;
+
+    setPublishState("publishing");
+    setPublishError(null);
     try {
-      // Build a NIP-09 kind:5 deletion event pointing at this key package
+      // Build a single NIP-09 kind:5 event referencing all queued event IDs
       const draft = await factory.build(
         { kind: 5 },
-        setDeleteEvents([pkg.event]),
+        setDeleteEvents(toDelete.map((p) => p.event)),
       );
       await publishEvent(draft);
-      setDeleteStates((prev) => ({ ...prev, [pkg.id]: "done" }));
+      setDeletedIds((prev) => new Set([...prev, ...toDelete.map((p) => p.id)]));
+      setQueuedIds(new Set());
+      setPublishState("done");
     } catch (e) {
-      setDeleteStates((prev) => ({ ...prev, [pkg.id]: "error" }));
-      setDeleteErrors((prev) => ({
-        ...prev,
-        [pkg.id]: e instanceof Error ? e.message : "Failed to queue deletion.",
-      }));
+      setPublishState("error");
+      setPublishError(e instanceof Error ? e.message : "Failed to publish deletions.");
     }
+  }
+
+  // Derive per-card delete state from the batched state
+  function deleteStateFor(id: string): "idle" | "pending" | "done" | "error" {
+    if (deletedIds.has(id)) return "done";
+    if (publishState === "publishing" && queuedIds.has(id)) return "pending";
+    return "idle";
   }
 
   // Loading state
@@ -357,8 +370,8 @@ export function ReportContent({
               <KeyPackageCard
                 key={pkg.id}
                 pkg={pkg}
-                onDelete={handleDelete}
-                deleteState={deleteStates[pkg.id] ?? "idle"}
+                onDelete={handleToggleQueue}
+                deleteState={queuedIds.has(pkg.id) ? "pending" : deleteStateFor(pkg.id)}
               />
             ))}
           </div>
@@ -413,20 +426,14 @@ export function ReportContent({
       {/* Summary line */}
       {packages.length > 0 ? (
         <div className="flex items-center gap-2 text-success">
-          <svg
-            className="size-4 shrink-0"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2.5}
-          >
+          <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
           <p className="text-sm font-medium">
             {packages.length} key package{packages.length !== 1 ? "s" : ""} found
-            {deletedCount > 0 && (
+            {deletedIds.size > 0 && (
               <span className="text-base-content/50 font-normal">
-                {" "}· {deletedCount} deletion{deletedCount !== 1 ? "s" : ""} queued
+                {" "}· {deletedIds.size} deleted
               </span>
             )}
           </p>
@@ -439,20 +446,38 @@ export function ReportContent({
       {packages.length > 0 && (
         <div className="flex flex-col gap-3">
           {packages.map((pkg) => (
-            <div key={pkg.id}>
-              <KeyPackageCard
-                pkg={pkg}
-                onDelete={handleDelete}
-                deleteState={deleteStates[pkg.id] ?? "idle"}
-              />
-              {deleteErrors[pkg.id] && (
-                <p className="text-xs text-error mt-1 px-1">
-                  {deleteErrors[pkg.id]}
-                </p>
-              )}
-            </div>
+            <KeyPackageCard
+              key={pkg.id}
+              pkg={pkg}
+              onDelete={handleToggleQueue}
+              deleteState={deletedIds.has(pkg.id) ? "done" : queuedIds.has(pkg.id) ? "pending" : "idle"}
+            />
           ))}
         </div>
+      )}
+
+      {/* Batch delete action */}
+      {queuedIds.size > 0 && publishState !== "done" && (
+        <div className="flex flex-col gap-2">
+          <button
+            className="btn btn-error btn-sm w-full"
+            onClick={handlePublishDeletions}
+            disabled={publishState === "publishing"}
+          >
+            {publishState === "publishing" ? (
+              <><span className="loading loading-spinner loading-xs" /> Deleting…</>
+            ) : (
+              `Delete ${queuedIds.size} selected key package${queuedIds.size !== 1 ? "s" : ""}`
+            )}
+          </button>
+          <p className="text-xs text-base-content/40 text-center">
+            This will publish a single NIP-09 deletion event for all selected packages.
+          </p>
+        </div>
+      )}
+
+      {publishError && (
+        <p className="text-xs text-error">{publishError}</p>
       )}
 
       {!isDoneSection && (
