@@ -84,6 +84,7 @@ function CompleteView() {
               draftEvents={draftArray}
               hasSkippedIssues={hasSkippedIssues}
               onStartOver={handleStartOver}
+              subjectPubkey={originalSubjectPubkey ?? ""}
             />
           ) : (
             <SelfView
