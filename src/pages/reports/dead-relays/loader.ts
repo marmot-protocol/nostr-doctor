@@ -45,6 +45,7 @@ import {
 } from "../../../lib/relay-monitors.ts";
 import { LOADER_TIMEOUT_MS } from "../../../lib/timeouts";
 import { loadAddressableEvent } from "../../../observable/loaders/load-addressable-event";
+import { KEY_PACKAGE_RELAY_LIST_KIND } from "../key-package-relays/loader.ts";
 
 // ---------------------------------------------------------------------------
 // State types
@@ -80,6 +81,7 @@ export type DeadRelaysState = {
   searchRelays: RelayListState;
   dmRelays: RelayListState;
   blockedRelays: RelayListState;
+  keyPackageRelays: RelayListState;
 };
 
 const EMPTY_LIST: RelayListState = { urls: null, verdicts: {} };
@@ -236,6 +238,15 @@ export function createBlockedRelaysLoader(
   );
 }
 
+export function createKeyPackageRelaysLoader(
+  user: User,
+): Observable<RelayListState> {
+  return loadAddressableEvent(user, KEY_PACKAGE_RELAY_LIST_KIND).pipe(
+    map((event) => getRelaysFromList(event)),
+    relayListStatus(),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Composed loader
 // ---------------------------------------------------------------------------
@@ -267,5 +278,6 @@ export default function deadRelaysLoader(
     searchRelays: streaming(createSearchRelaysLoader(user)),
     dmRelays: streaming(createDmRelaysLoader(user)),
     blockedRelays: streaming(createBlockedRelaysLoader(user)),
+    keyPackageRelays: streaming(createKeyPackageRelaysLoader(user)),
   }).pipe(takeUntil(timer(LOADER_TIMEOUT_MS)), shareReplay(1));
 }

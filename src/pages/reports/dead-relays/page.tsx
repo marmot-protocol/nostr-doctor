@@ -33,7 +33,7 @@ type Nip65ListStep = {
 };
 
 type SimpleListStep = {
-  kind: "favorite-relays" | "search-relays" | "dm-relays" | "blocked-relays";
+  kind: "favorite-relays" | "search-relays" | "dm-relays" | "blocked-relays" | "key-package-relays";
   label: string;
   eventKind: number;
   urls: string[];
@@ -394,6 +394,12 @@ const SIMPLE_SECTIONS: Array<{
     label: "Blocked Relays",
     eventKind: 10006,
     key: "blockedRelays",
+  },
+  {
+    kind: "key-package-relays",
+    label: "Key Package Relays",
+    eventKind: 10051,
+    key: "keyPackageRelays",
   },
 ];
 
