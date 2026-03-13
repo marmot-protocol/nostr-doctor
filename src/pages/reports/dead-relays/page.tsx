@@ -95,6 +95,51 @@ function MarkerPill({ marker }: { marker: RelayMarker }) {
 }
 
 // ---------------------------------------------------------------------------
+// CapabilityWarning — contextual message shown under a relay row
+// ---------------------------------------------------------------------------
+
+function CapabilityWarning({
+  showSearch,
+  showAuth,
+  searchSupport,
+  authStatus,
+  verdict,
+}: {
+  showSearch?: boolean;
+  showAuth?: boolean;
+  searchSupport: SearchSupport;
+  authStatus: AuthStatus;
+  verdict: RelayVerdict | null;
+}) {
+  // Offline relay — generic message, no capability-specific advice
+  if (verdict === "offline") {
+    return (
+      <p className="text-xs text-error/80 pl-8 pb-1">
+        This relay appears to be offline. You may want to remove it so clients don't waste time connecting to it.
+      </p>
+    );
+  }
+
+  if (showSearch && searchSupport === "unsupported") {
+    return (
+      <p className="text-xs text-warning/80 pl-8 pb-1">
+        This relay does not support NIP-50 keyword search. Nostr clients that use your search relay list may get no results here — consider replacing it with a relay that supports search.
+      </p>
+    );
+  }
+
+  if (showAuth && authStatus === "unprotected") {
+    return (
+      <p className="text-xs text-error/80 pl-8 pb-1">
+        This DM relay does not require authentication before serving messages. Anyone can query it for your encrypted gift-wrap events (kind:1059). Your DM relays should enforce NIP-42 auth to protect your message metadata.
+      </p>
+    );
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // RelayRow
 // ---------------------------------------------------------------------------
 
@@ -124,60 +169,92 @@ function RelayRow({
   const isRemoved = removedUrls.has(entry.url);
   const name = info?.name ?? entry.url;
 
+  const searchSupport = entry.capabilities.searchSupport ?? null;
+  const authStatus = entry.capabilities.authStatus ?? null;
+
+  // Show warning when loader is done (not checking) and there's a problem
+  const hasWarning =
+    !isChecking &&
+    !isRemoved &&
+    (isOffline ||
+      (showSearch && searchSupport === "unsupported") ||
+      (showAuth && authStatus === "unprotected"));
+
   return (
     <div
       className={[
-        "flex items-center gap-2 py-2 min-w-0 transition-opacity duration-200",
-        isOffline && !isRemoved ? "border-l-2 border-error pl-2 -ml-0.5" : "",
+        "flex flex-col transition-opacity duration-200",
         isRemoved ? "opacity-40" : "",
       ]
         .filter(Boolean)
         .join(" ")}
     >
-      {/* Icon + name */}
-      <div className="flex-1 min-w-0 flex items-center gap-2">
-        {iconUrl ? (
-          <img src={iconUrl} alt="" className="size-6 rounded shrink-0 object-cover bg-base-200" />
-        ) : (
-          <div className="size-6 rounded shrink-0 bg-base-200 flex items-center justify-center text-base-content/40 text-[10px] font-mono" aria-hidden>…</div>
-        )}
-        <div className="min-w-0 flex flex-col gap-0">
-          <span className="font-medium text-sm text-base-content truncate leading-tight">
-            {name}
-          </span>
-          <span className="font-mono text-[11px] text-base-content/50 truncate">
-            {entry.url}
-          </span>
+      <div
+        className={[
+          "flex items-center gap-2 py-2 min-w-0",
+          isOffline && !isRemoved ? "border-l-2 border-error pl-2 -ml-0.5" : "",
+          showAuth && authStatus === "unprotected" && !isRemoved ? "border-l-2 border-error pl-2 -ml-0.5" : "",
+          showSearch && searchSupport === "unsupported" && !isRemoved ? "border-l-2 border-warning pl-2 -ml-0.5" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        {/* Icon + name */}
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          {iconUrl ? (
+            <img src={iconUrl} alt="" className="size-6 rounded shrink-0 object-cover bg-base-200" />
+          ) : (
+            <div className="size-6 rounded shrink-0 bg-base-200 flex items-center justify-center text-base-content/40 text-[10px] font-mono" aria-hidden>…</div>
+          )}
+          <div className="min-w-0 flex flex-col gap-0">
+            <span className="font-medium text-sm text-base-content truncate leading-tight">
+              {name}
+            </span>
+            <span className="font-mono text-[11px] text-base-content/50 truncate">
+              {entry.url}
+            </span>
+          </div>
         </div>
+
+        {/* Badges */}
+        <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+          {marker && <MarkerPill marker={marker} />}
+          {showSearch && (
+            <SearchBadge status={searchSupport} />
+          )}
+          {showAuth && (
+            <AuthBadge status={authStatus} />
+          )}
+          <VerdictBadge verdict={entry.verdict} isChecking={isChecking} />
+        </div>
+
+        {/* Remove / trash button */}
+        {isRemoved ? (
+          <span className="badge badge-warning badge-xs shrink-0">queued</span>
+        ) : (
+          <button
+            className="btn btn-ghost btn-xs text-base-content/30 hover:text-error hover:bg-error/10 shrink-0"
+            onClick={() => onRemove(entry.url)}
+            disabled={pendingRemove}
+            aria-label={`Queue removal of ${entry.url}`}
+            title="Remove from list"
+          >
+            <svg className="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+        )}
       </div>
 
-      {/* Badges */}
-      <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-        {marker && <MarkerPill marker={marker} />}
-        {showSearch && (
-          <SearchBadge status={entry.capabilities.searchSupport ?? null} />
-        )}
-        {showAuth && (
-          <AuthBadge status={entry.capabilities.authStatus ?? null} />
-        )}
-        <VerdictBadge verdict={entry.verdict} isChecking={isChecking} />
-      </div>
-
-      {/* Remove / trash button */}
-      {isRemoved ? (
-        <span className="badge badge-warning badge-xs shrink-0">queued</span>
-      ) : (
-        <button
-          className="btn btn-ghost btn-xs text-base-content/30 hover:text-error hover:bg-error/10 shrink-0"
-          onClick={() => onRemove(entry.url)}
-          disabled={pendingRemove}
-          aria-label={`Queue removal of ${entry.url}`}
-          title="Remove from list"
-        >
-          <svg className="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-        </button>
+      {/* Contextual warning message */}
+      {hasWarning && (
+        <CapabilityWarning
+          showSearch={showSearch}
+          showAuth={showAuth}
+          searchSupport={searchSupport}
+          authStatus={authStatus}
+          verdict={entry.verdict}
+        />
       )}
     </div>
   );
@@ -235,19 +312,26 @@ function ListSection({
   }
 
   async function handlePublishRemovals() {
-    if (pendingRemovals.length === 0) return;
+    // Safety: only remove URLs that are actually in the current list
+    const safeRemovals = pendingRemovals.filter((url) => urlList.includes(url));
+    if (safeRemovals.length === 0) return;
+
     setPublishing(true);
     setError(null);
     try {
+      // Read the event fresh from the store at publish time — never from
+      // stale loader state — so we never accidentally wipe relay tags that
+      // were added after the loader ran.
       const existing = eventStore.getReplaceable(eventKind, subjectPubkey);
       if (!existing) throw new Error(`Could not find kind:${eventKind} event.`);
 
       let draft: EventTemplate;
 
       if (eventKind === 10002) {
-        // NIP-65: remove from inbox and/or outbox depending on marker
+        // NIP-65: for each queued URL, only remove the specific side(s)
+        // indicated by its marker. Unrelated relay tags are untouched.
         let current: EventTemplate = existing;
-        for (const url of pendingRemovals) {
+        for (const url of safeRemovals) {
           const marker = markers?.[url];
           if (!marker || marker === "both" || marker === "write") {
             current = await factory.modify(current, removeOutboxRelay(url));
@@ -258,8 +342,9 @@ function ListSection({
         }
         draft = current;
       } else {
-        // All other list kinds: remove relay tags
-        const tagOps = pendingRemovals.map((url) => removeRelayTag(url));
+        // All other list kinds: apply one removeRelayTag per queued URL in a
+        // single modify call — the rest of the list is preserved untouched.
+        const tagOps = safeRemovals.map((url) => removeRelayTag(url));
         draft = await factory.modify(existing, modifyPublicTags(...tagOps));
       }
 
