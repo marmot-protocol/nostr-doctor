@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { use$ } from "applesauce-react/hooks";
 import { pool } from "../../../lib/relay.ts";
 import type { SectionProps } from "../accordion-types.ts";
-import type { KeyPackageRelayListState } from "./loader.ts";
+import type { DeleteSupport, KeyPackageRelayListState } from "./loader.ts";
 import type { RelayVerdict } from "../../../lib/relay-monitors.ts";
 
 // ---------------------------------------------------------------------------
@@ -31,22 +31,52 @@ function VerdictBadge({
 }
 
 // ---------------------------------------------------------------------------
+// DeleteSupportBadge
+// ---------------------------------------------------------------------------
+
+function DeleteSupportBadge({
+  deleteSupport,
+  isChecking,
+}: {
+  deleteSupport: DeleteSupport | undefined;
+  isChecking: boolean;
+}) {
+  if (deleteSupport === "supported")
+    return (
+      <span className="badge badge-success badge-sm">event deletions</span>
+    );
+  if (deleteSupport === "unsupported")
+    return <span className="badge badge-warning badge-sm">no deletions</span>;
+  if (!isChecking)
+    return <span className="badge badge-ghost badge-sm">deletions?</span>;
+  return (
+    <span className="badge badge-ghost badge-sm gap-1">
+      <span className="loading loading-spinner loading-xs" />
+      deletions
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // RelayRow
 // ---------------------------------------------------------------------------
 
 function RelayRow({
   relayUrl,
   verdict,
+  deleteSupport,
   isChecking,
 }: {
   relayUrl: string;
   verdict: RelayVerdict | null | undefined;
+  deleteSupport: DeleteSupport | undefined;
   isChecking: boolean;
 }) {
   const relay = useMemo(() => pool.relay(relayUrl), [relayUrl]);
   const info = use$(relay.information$);
   const iconUrl = use$(relay.icon$);
   const isOffline = verdict === "offline";
+  const isUnsupportedDelete = deleteSupport === "unsupported";
   const name = info?.name ?? relayUrl;
 
   return (
@@ -54,6 +84,7 @@ function RelayRow({
       className={[
         "flex items-center gap-2 py-2 min-w-0",
         isOffline ? "border-l-2 border-error pl-2 -ml-0.5" : "",
+        isUnsupportedDelete ? "border-l-2 border-warning pl-2 -ml-0.5" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -82,7 +113,13 @@ function RelayRow({
           </span>
         </div>
       </div>
-      <VerdictBadge verdict={verdict} isChecking={isChecking} />
+      <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+        <DeleteSupportBadge
+          deleteSupport={deleteSupport}
+          isChecking={isChecking}
+        />
+        <VerdictBadge verdict={verdict} isChecking={isChecking} />
+      </div>
     </div>
   );
 }
@@ -102,6 +139,10 @@ export function ReportContent({
 
   const relayUrls = state?.relayUrls ?? null;
   const verdicts = useMemo(() => state?.verdicts ?? {}, [state?.verdicts]);
+  const deleteSupport = useMemo(
+    () => state?.deleteSupport ?? {},
+    [state?.deleteSupport],
+  );
   const urlList = useMemo(() => relayUrls ?? [], [relayUrls]);
 
   const offlineCount = useMemo(
@@ -115,6 +156,24 @@ export function ReportContent({
       urlList.length > 0 &&
       urlList.every((url) => verdicts[url] === "online"),
     [isLoading, urlList, verdicts],
+  );
+
+  const unsupportedDeleteCount = useMemo(
+    () => urlList.filter((url) => deleteSupport[url] === "unsupported").length,
+    [urlList, deleteSupport],
+  );
+
+  const unknownDeleteCount = useMemo(
+    () => urlList.filter((url) => deleteSupport[url] === "unknown").length,
+    [urlList, deleteSupport],
+  );
+
+  const allDeleteSupported = useMemo(
+    () =>
+      !isLoading &&
+      urlList.length > 0 &&
+      urlList.every((url) => deleteSupport[url] === "supported"),
+    [isLoading, urlList, deleteSupport],
   );
 
   const [reported, setReported] = useState(false);
@@ -132,15 +191,35 @@ export function ReportContent({
           status: "notfound",
           summary: "Key package relay list is empty",
         });
-      } else if (offlineCount > 0) {
+      } else if (
+        offlineCount > 0 ||
+        unsupportedDeleteCount > 0 ||
+        unknownDeleteCount > 0
+      ) {
+        const parts: string[] = [];
+        if (offlineCount > 0) {
+          parts.push(
+            `${offlineCount} offline relay${offlineCount !== 1 ? "s" : ""}`,
+          );
+        }
+        if (unsupportedDeleteCount > 0) {
+          parts.push(
+            `${unsupportedDeleteCount} relay${unsupportedDeleteCount !== 1 ? "s" : ""} missing event deletions`,
+          );
+        }
+        if (unknownDeleteCount > 0) {
+          parts.push(
+            `${unknownDeleteCount} relay${unknownDeleteCount !== 1 ? "s" : ""} unknown deletions support`,
+          );
+        }
         onDone({
           status: "error",
-          summary: `${offlineCount} offline relay${offlineCount !== 1 ? "s" : ""}`,
+          summary: parts.join(", "),
         });
       } else {
         onDone({
           status: "clean",
-          summary: `${urlList.length} relay${urlList.length !== 1 ? "s" : ""} online`,
+          summary: `${urlList.length} relay${urlList.length !== 1 ? "s" : ""} online + event deletions`,
         });
       }
     }
@@ -155,7 +234,7 @@ export function ReportContent({
           <span className="loading loading-spinner loading-sm text-primary" />
           <p className="text-sm text-base-content/60">
             {urlList.length > 0
-              ? "Checking key package relay connectivity…"
+              ? "Checking key package relay connectivity and event deletions support…"
               : "Looking for your key package relay list…"}
           </p>
         </div>
@@ -166,6 +245,7 @@ export function ReportContent({
                 key={url}
                 relayUrl={url}
                 verdict={verdicts[url]}
+                deleteSupport={deleteSupport[url]}
                 isChecking={true}
               />
             ))}
@@ -228,7 +308,7 @@ export function ReportContent({
 
   return (
     <div className="flex flex-col gap-4 py-2">
-      {allOnline ? (
+      {allOnline && allDeleteSupported ? (
         <div className="flex items-center gap-2 text-success">
           <svg
             className="size-4 shrink-0"
@@ -245,15 +325,33 @@ export function ReportContent({
           </svg>
           <p className="text-sm font-medium">
             All {urlList.length} key package relay
-            {urlList.length !== 1 ? "s" : ""} online
+            {urlList.length !== 1 ? "s" : ""} online and support event deletions
           </p>
         </div>
-      ) : offlineCount > 0 ? (
-        <p className="text-sm text-warning">
-          {offlineCount} relay{offlineCount !== 1 ? "s are" : " is"} offline.
-          Others may not be able to deliver key packages to you.
-        </p>
-      ) : null}
+      ) : (
+        <div className="flex flex-col gap-1">
+          {offlineCount > 0 && (
+            <p className="text-sm text-warning">
+              {offlineCount} relay{offlineCount !== 1 ? "s are" : " is"}{" "}
+              offline. Others may not be able to deliver key packages to you.
+            </p>
+          )}
+          {unsupportedDeleteCount > 0 && (
+            <p className="text-sm text-warning">
+              {unsupportedDeleteCount} relay
+              {unsupportedDeleteCount !== 1 ? "s do" : " does"} not advertise
+              event deletions support.
+            </p>
+          )}
+          {unknownDeleteCount > 0 && (
+            <p className="text-sm text-base-content/70">
+              Could not verify event deletions support on {unknownDeleteCount}{" "}
+              relay
+              {unknownDeleteCount !== 1 ? "s" : ""} (no `supported_nips` data).
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-col gap-0 divide-y divide-base-200">
         {urlList.map((url) => (
@@ -261,6 +359,7 @@ export function ReportContent({
             key={url}
             relayUrl={url}
             verdict={verdicts[url]}
+            deleteSupport={deleteSupport[url]}
             isChecking={false}
           />
         ))}

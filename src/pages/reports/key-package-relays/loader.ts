@@ -2,7 +2,9 @@
 // Key Package Relay List loader (kind:10051)
 //
 // Fetches the subject's key package relay list (kind:10051), then checks
-// the online/offline verdict for each relay using NIP-66 monitors.
+// each relay for:
+//   1. online/offline verdict using NIP-66 monitors
+//   2. kind:9 delete support via relay `supported_nips` metadata
 //
 // State streams incrementally:
 //   1. Relay URLs arrive once the kind:10051 event is found (or null if not found)
@@ -18,7 +20,6 @@ import { merge, of, shareReplay, timer, type Observable } from "rxjs";
 import {
   catchError,
   map,
-  scan,
   startWith,
   switchMap,
   takeUntil,
@@ -27,30 +28,38 @@ import {
   relayVerdict,
   type RelayVerdict,
 } from "../../../lib/relay-monitors.ts";
-import { DEFAULT_RELAYS, LOOKUP_RELAYS } from "../../../lib/relay.ts";
+import { DEFAULT_RELAYS, LOOKUP_RELAYS, pool } from "../../../lib/relay.ts";
 import { eventLoader } from "../../../lib/store.ts";
 import { LOADER_TIMEOUT_MS } from "../../../lib/timeouts.ts";
+import { combineLatestBy } from "../../../observable/operator/combine-latest-by.ts";
+import { combineLatestByValue } from "../../../observable/operator/combine-latest-by-value.ts";
 
 // ---------------------------------------------------------------------------
 // Kind constant — key package relay list
 // ---------------------------------------------------------------------------
 
 export const KEY_PACKAGE_RELAY_LIST_KIND = 10051;
+export const DELETE_EVENT_KIND = 9;
 
 // ---------------------------------------------------------------------------
 // State types
 // ---------------------------------------------------------------------------
+
+export type DeleteSupport = "supported" | "unsupported" | "unknown" | null;
 
 export type KeyPackageRelayListState = {
   /** Relay URLs from kind:10051. null = event not found / still loading. */
   relayUrls: string[] | null;
   /** Per-relay online verdict. null = verdict still in progress. */
   verdicts: Record<string, RelayVerdict | null>;
+  /** Per-relay kind:9 support from supported_nips. null = still loading. */
+  deleteSupport: Record<string, DeleteSupport>;
 };
 
 const EMPTY_STATE: KeyPackageRelayListState = {
   relayUrls: null,
   verdicts: {},
+  deleteSupport: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -79,36 +88,44 @@ export function createLoader(user: User): Observable<KeyPackageRelayListState> {
 
   return event$.pipe(
     map((event) => (event ? getRelaysFromList(event) : [])),
-    switchMap((urls) => {
-      const seed: KeyPackageRelayListState = {
-        relayUrls: urls,
-        verdicts: Object.fromEntries(urls.map((url) => [url, null])),
-      };
-
-      if (urls.length === 0) return of(seed);
-
-      const patches$ = merge(
-        ...urls.map((url) =>
-          relayVerdict(url).pipe(
-            catchError(() => of("unknown" as RelayVerdict)),
-            map((verdict) => ({ url, verdict })),
-          ),
+    // For each relay list, break into multiple streams
+    combineLatestBy({
+      // Pass through relay URLs
+      relayUrls: map((urls) => urls),
+      // Check online verdicts for each relay
+      verdicts: combineLatestByValue((url) =>
+        relayVerdict(url).pipe(
+          catchError(() => of("unknown" as RelayVerdict)),
+          // Ensure each relay branch emits immediately.
+          startWith(null as RelayVerdict | null),
         ),
-      );
-
-      return patches$.pipe(
-        scan(
-          (state, { url, verdict }) => ({
-            ...state,
-            verdicts: { ...state.verdicts, [url]: verdict },
+      ),
+      // Check kind:9 support for each relay
+      deleteSupport: combineLatestByValue((url) =>
+        pool.relay(url).supported$.pipe(
+          map((supportedNips) => {
+            if (!Array.isArray(supportedNips)) return "unknown";
+            return supportedNips.includes(DELETE_EVENT_KIND)
+              ? "supported"
+              : "unsupported";
           }),
-          seed,
+          catchError(() => of("unknown" as DeleteSupport)),
+          // Ensure each relay branch emits immediately.
+          startWith(null as DeleteSupport),
         ),
-        startWith(seed),
-      );
+      ),
     }),
+    // Convert map results to objects
+    map(({ relayUrls, verdicts, deleteSupport }) => ({
+      relayUrls,
+      verdicts: Object.fromEntries(verdicts.entries()),
+      deleteSupport: Object.fromEntries(deleteSupport.entries()),
+    })),
+    // Catch all errors and return empty state
     catchError(() => of(EMPTY_STATE)),
+    // Hard deadline
     takeUntil(timer(LOADER_TIMEOUT_MS)),
+    // Prevent re-execution on multiple subscribers
     shareReplay(1),
   );
 }

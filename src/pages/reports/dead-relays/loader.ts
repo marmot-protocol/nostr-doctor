@@ -8,7 +8,6 @@
 //   - Search relays    (kind:10007) — online verdict + NIP-50 support check
 //   - DM relays        (kind:10050) — online verdict + NIP-42 auth probe
 //   - Blocked relays   (kind:10006) — online verdict
-//   - Key package relays (kind:10051) — online verdict
 //
 // State streams incrementally as each sub-loader resolves.
 // The page layer applies takeUntil(timer(N)) + toLoaderState().
@@ -45,7 +44,6 @@ import { pool } from "../../../lib/relay.ts";
 import { LOADER_TIMEOUT_MS } from "../../../lib/timeouts.ts";
 import { loadAddressableEvent } from "../../../observable/loaders/load-addressable-event.ts";
 import { probeRelayAuth } from "../../../observable/loaders/probe-relay-auth.ts";
-import { KEY_PACKAGE_RELAY_LIST_KIND } from "../key-package-relays/loader.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -102,7 +100,6 @@ export type DeadRelaysState = {
   searchRelays: RelayListState;
   dmRelays: RelayListState;
   blockedRelays: RelayListState;
-  keyPackageRelays: RelayListState;
 };
 
 const EMPTY_LIST: RelayListState = { urls: null, entries: {} };
@@ -329,15 +326,6 @@ export function createBlockedRelaysLoader(
   );
 }
 
-export function createKeyPackageRelaysLoader(
-  user: User,
-): Observable<RelayListState> {
-  return loadAddressableEvent(user, KEY_PACKAGE_RELAY_LIST_KIND).pipe(
-    map((event) => getRelaysFromList(event)),
-    relayListStatus(),
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Composed loader
 // ---------------------------------------------------------------------------
@@ -369,6 +357,5 @@ export default function deadRelaysLoader(
     searchRelays: streaming(createSearchRelaysLoader(user)),
     dmRelays: streaming(createDmRelaysLoader(user)),
     blockedRelays: streaming(createBlockedRelaysLoader(user)),
-    keyPackageRelays: streaming(createKeyPackageRelaysLoader(user)),
   }).pipe(takeUntil(timer(LOADER_TIMEOUT_MS)), shareReplay(1));
 }
