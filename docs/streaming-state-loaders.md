@@ -103,6 +103,105 @@ subscribers receive the last emitted state immediately.
 
 ---
 
+## RxJS Pipeline Documentation Standard
+
+When documenting a loader pipeline, follow a consistent "section -> step ->
+operator" structure so readers can scan from high-level intent down to
+per-operator rationale.
+
+### 1) File-level header (what this loader does)
+
+At the top of the file, add a short block comment describing:
+
+- which event kinds or resources are fetched,
+- ordered source priority (primary, fallback, defaults),
+- whether state streams incrementally or single-shot,
+- where deadline/completion wrapping happens (loader vs page).
+
+### 2) Section dividers (where to look)
+
+Split the loader file into small labeled sections:
+
+- constants,
+- state types,
+- helpers,
+- loader body.
+
+Use simple divider comments so maintainers can quickly navigate large loaders.
+
+### 3) Step comments before major streams (why each phase exists)
+
+Inside `createLoader()`, annotate each major phase with `Step N` comments:
+
+- resolving prerequisite input (relay list, profile, etc.),
+- fetching primary data,
+- accumulating/deriving final state.
+
+Each step comment should explain intent and dependency order, not implementation
+details.
+
+### 4) Operator comments in every non-trivial pipe (why this operator)
+
+For each non-obvious operator in a pipeline, add a one-line "why" comment
+immediately above it. Keep comments short and mechanical:
+
+- deadline guards (`timeout`, `takeUntil`),
+- fallback behavior (`catchError`),
+- compatibility shims (`startWith` for `combineLatest`),
+- replay/caching behavior (`shareReplay`),
+- accumulation semantics (`scan` dedupe/ordering rules).
+
+Skip comments for trivial passthrough transforms unless the transform encodes
+business meaning.
+
+### 5) Comment boundaries at failure edges
+
+Whenever an error boundary changes behavior (e.g., "this branch becomes null
+state", "ignore per-relay failure"), comment that boundary explicitly. Readers
+should be able to answer "what fails open vs fails closed?" from comments alone.
+
+### 6) Keep comments stable under refactors
+
+Prefer comments that describe invariant intent ("prevent re-execution on
+multiple subscribers") over temporary implementation details ("needed for bug
+123"). If implementation changes but intent stays the same, comments should
+still be correct.
+
+### Example style
+
+```ts
+export function createLoader(user: User): Observable<State> {
+  // Step 1: resolve prerequisite relay hints used by downstream requests
+  const relayHints$ = user.outboxes$.pipe(
+    // Skip undefined cache state before starting downstream composition
+    defined(),
+    // We only need one snapshot for this loader run
+    first(),
+    // Fail open: missing hints should not fail the whole loader
+    catchError(() => of([])),
+    // Reuse across multiple downstream branches
+    shareReplay(1),
+  );
+
+  // Step 2: fetch and accumulate events from all relay sources
+  return relayHints$.pipe(
+    switchMap((hints) =>
+      eventLoader({ kind: 1, pubkey: user.pubkey, relays: relaySet(hints) }),
+    ),
+    // Keep newest event per id as results stream in
+    scan(accumulateState, initialState),
+    // Emit an initial partial state immediately
+    startWith(initialState),
+    // Fail open at top-level to keep the view renderable
+    catchError(() => of(initialState)),
+    // Prevent duplicate network work across subscribers
+    shareReplay(1),
+  );
+}
+```
+
+---
+
 ## The operator toolkit
 
 These operators make it practical to compose multi-source streaming state

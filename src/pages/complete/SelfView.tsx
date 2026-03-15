@@ -11,16 +11,26 @@ import { CompleteHeader, SuccessBadge } from "./_shared.tsx";
 
 function kindLabel(kind: number): string {
   switch (kind) {
-    case 0: return "Profile metadata";
-    case 3: return "Follow list";
-    case 5: return "Event deletion";
-    case 10002: return "Relay list (NIP-65)";
-    case 10006: return "Blocked relays";
-    case 10007: return "Search relays";
-    case 10012: return "Favorite relays";
-    case 10050: return "DM relays";
-    case 10051: return "Key package relays";
-    default: return `Kind ${kind}`;
+    case 0:
+      return "Profile metadata";
+    case 3:
+      return "Follow list";
+    case 5:
+      return "Event deletion";
+    case 10002:
+      return "Relay list (NIP-65)";
+    case 10006:
+      return "Blocked relays";
+    case 10007:
+      return "Search relays";
+    case 10012:
+      return "Favorite relays";
+    case 10050:
+      return "DM relays";
+    case 10051:
+      return "Key package relays";
+    default:
+      return `Kind ${kind}`;
   }
 }
 
@@ -46,9 +56,10 @@ function DraftEventRow({
   const badgeClass = kindBadgeClass(event.kind);
 
   // For kind:5 deletions, show which event is being deleted
-  const deletedIds = event.kind === 5
-    ? event.tags.filter((t) => t[0] === "e").map((t) => t[1])
-    : [];
+  const deletedIds =
+    event.kind === 5
+      ? event.tags.filter((t) => t[0] === "e").map((t) => t[1])
+      : [];
 
   return (
     <div className="flex items-start gap-3 py-2.5 border-b border-base-200 last:border-0">
@@ -84,7 +95,11 @@ function DraftEventRow({
           stroke="currentColor"
           strokeWidth={2.5}
         >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M6 18L18 6M6 6l12 12"
+          />
         </svg>
       </button>
     </div>

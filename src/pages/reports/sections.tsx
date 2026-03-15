@@ -38,7 +38,8 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
   {
     name: "relay-health",
     label: "Relay Health",
-    description: "Checks connectivity, NIP-50 search, and DM auth across all your relay lists",
+    description:
+      "Checks connectivity, NIP-50 search, and DM auth across all your relay lists",
     createLoader: deadRelaysLoader,
     Component: DeadRelaysContent,
   },
@@ -52,7 +53,8 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
   {
     name: "key-packages",
     label: "Key Packages",
-    description: "Looks for MLS key packages (kind:443) across your key package relays",
+    description:
+      "Looks for MLS key packages (kind:443) across your key package relays",
     createLoader: createKeyPackagesLoader,
     Component: KeyPackagesContent,
   },

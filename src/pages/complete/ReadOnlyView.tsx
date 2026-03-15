@@ -14,16 +14,26 @@ import { CompleteHeader, SuccessBadge } from "./_shared.tsx";
 
 function kindLabel(kind: number): string {
   switch (kind) {
-    case 0: return "Profile metadata";
-    case 3: return "Follow list";
-    case 5: return "Event deletion";
-    case 10002: return "Relay list (NIP-65)";
-    case 10006: return "Blocked relays";
-    case 10007: return "Search relays";
-    case 10012: return "Favorite relays";
-    case 10050: return "DM relays";
-    case 10051: return "Key package relays";
-    default: return `Kind ${kind}`;
+    case 0:
+      return "Profile metadata";
+    case 3:
+      return "Follow list";
+    case 5:
+      return "Event deletion";
+    case 10002:
+      return "Relay list (NIP-65)";
+    case 10006:
+      return "Blocked relays";
+    case 10007:
+      return "Search relays";
+    case 10012:
+      return "Favorite relays";
+    case 10050:
+      return "DM relays";
+    case 10051:
+      return "Key package relays";
+    default:
+      return `Kind ${kind}`;
   }
 }
 
@@ -36,15 +46,18 @@ function DraftEventRow({
 }) {
   const uid = getEventUID(event);
   const label = kindLabel(event.kind);
-  const deletedIds = event.kind === 5
-    ? event.tags.filter((t) => t[0] === "e").map((t) => t[1])
-    : [];
+  const deletedIds =
+    event.kind === 5
+      ? event.tags.filter((t) => t[0] === "e").map((t) => t[1])
+      : [];
 
   return (
     <div className="flex items-start gap-3 py-2.5 border-b border-base-200 last:border-0">
       <div className="flex-1 min-w-0 flex flex-col gap-0.5">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="badge badge-xs badge-ghost font-mono">kind:{event.kind}</span>
+          <span className="badge badge-xs badge-ghost font-mono">
+            kind:{event.kind}
+          </span>
           <span className="text-sm text-base-content">{label}</span>
         </div>
         {deletedIds.length > 0 && (
@@ -65,8 +78,18 @@ function DraftEventRow({
         aria-label={`Remove ${label} from queue`}
         title="Remove from queue"
       >
-        <svg className="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        <svg
+          className="size-3.5"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M6 18L18 6M6 6l12 12"
+          />
         </svg>
       </button>
     </div>
@@ -104,9 +127,13 @@ function InlineExtensionSignIn({ subjectPubkey }: { subjectPubkey: string }) {
       }
     } catch (err) {
       if (err instanceof ExtensionMissingError) {
-        setError("No Nostr browser extension found. Install Alby or nos2x and try again.");
+        setError(
+          "No Nostr browser extension found. Install Alby or nos2x and try again.",
+        );
       } else {
-        setError(err instanceof Error ? err.message : "Extension connection failed.");
+        setError(
+          err instanceof Error ? err.message : "Extension connection failed.",
+        );
       }
     } finally {
       setLoading(false);
@@ -127,16 +154,24 @@ function InlineExtensionSignIn({ subjectPubkey }: { subjectPubkey: string }) {
           </>
         ) : (
           <>
-            <svg className="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            <svg
+              className="size-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M13 10V3L4 14h7v7l9-11h-7z"
+              />
             </svg>
             Sign in with browser extension
           </>
         )}
       </button>
-      {error && (
-        <p className="text-xs text-error">{error}</p>
-      )}
+      {error && <p className="text-xs text-error">{error}</p>}
       <button
         className="btn btn-ghost btn-sm w-full text-base-content/50"
         onClick={() =>
@@ -226,7 +261,8 @@ function ReadOnlyView({
             Review pending fixes
           </p>
           <p className="text-xs text-base-content/50 mt-0.5">
-            Sign in with the account you diagnosed to publish these changes directly.
+            Sign in with the account you diagnosed to publish these changes
+            directly.
           </p>
         </div>
 

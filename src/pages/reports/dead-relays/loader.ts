@@ -106,13 +106,19 @@ export type DeadRelaysState = {
 };
 
 const EMPTY_LIST: RelayListState = { urls: null, entries: {} };
-const EMPTY_NIP65: Nip65RelayListState = { urls: null, markers: {}, entries: {} };
+const EMPTY_NIP65: Nip65RelayListState = {
+  urls: null,
+  markers: {},
+  entries: {},
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function parseNip65Markers(event: NostrEvent | null): Record<string, RelayMarker> {
+function parseNip65Markers(
+  event: NostrEvent | null,
+): Record<string, RelayMarker> {
   if (!event) return {};
   const markers: Record<string, RelayMarker> = {};
   for (const tag of event.tags) {
@@ -143,7 +149,10 @@ function probeSearchSupport(url: string): Observable<SearchSupport> {
       map(() => "supported" as SearchSupport),
       defaultIfEmpty("supported" as SearchSupport),
       catchError(() => of("unsupported" as SearchSupport)),
-      timeout({ first: SEARCH_PROBE_TIMEOUT_MS, with: () => of("unknown" as SearchSupport) }),
+      timeout({
+        first: SEARCH_PROBE_TIMEOUT_MS,
+        with: () => of("unknown" as SearchSupport),
+      }),
       catchError(() => of("unknown" as SearchSupport)),
     );
 }
@@ -198,14 +207,22 @@ function relayListStatus(
           ...urls.map((url) =>
             capabilityLoader(url).pipe(
               catchError(() => of({} as RelayCapabilities)),
-              map((capabilities) => ({ type: "capability" as const, url, capabilities })),
+              map((capabilities) => ({
+                type: "capability" as const,
+                url,
+                capabilities,
+              })),
             ),
           ),
         );
 
         return merge(verdictPatches$, capabilityPatches$).pipe(
           scan((state, patch): RelayListState => {
-            const prev = state.entries[patch.url] ?? { url: patch.url, verdict: null, capabilities: {} };
+            const prev = state.entries[patch.url] ?? {
+              url: patch.url,
+              verdict: null,
+              capabilities: {},
+            };
             if (patch.type === "verdict") {
               return {
                 ...state,
@@ -219,7 +236,13 @@ function relayListStatus(
                 ...state,
                 entries: {
                   ...state.entries,
-                  [patch.url]: { ...prev, capabilities: { ...prev.capabilities, ...patch.capabilities } },
+                  [patch.url]: {
+                    ...prev,
+                    capabilities: {
+                      ...prev.capabilities,
+                      ...patch.capabilities,
+                    },
+                  },
                 },
               };
             }
@@ -240,25 +263,37 @@ export function createNip65Loader(user: User): Observable<Nip65RelayListState> {
       const markerMap = parseNip65Markers(event);
       const urls = Object.keys(markerMap);
       if (urls.length === 0) {
-        return of({ urls, markers: markerMap, entries: {} } as Nip65RelayListState);
+        return of({
+          urls,
+          markers: markerMap,
+          entries: {},
+        } as Nip65RelayListState);
       }
       return of(urls).pipe(
         relayListStatus(),
-        map(({ urls: u, entries }) => ({ urls: u, markers: markerMap, entries })),
+        map(({ urls: u, entries }) => ({
+          urls: u,
+          markers: markerMap,
+          entries,
+        })),
       );
     }),
     catchError(() => of(EMPTY_NIP65)),
   );
 }
 
-export function createFavoriteRelaysLoader(user: User): Observable<RelayListState> {
+export function createFavoriteRelaysLoader(
+  user: User,
+): Observable<RelayListState> {
   return loadAddressableEvent(user, kinds.FavoriteRelays).pipe(
     map((event) => getRelaysFromList(event)),
     relayListStatus(),
   );
 }
 
-export function createSearchRelaysLoader(user: User): Observable<RelayListState> {
+export function createSearchRelaysLoader(
+  user: User,
+): Observable<RelayListState> {
   return loadAddressableEvent(user, kinds.SearchRelaysList).pipe(
     map((event) => getRelaysFromList(event)),
     relayListStatus((url) =>
@@ -274,7 +309,10 @@ export function createDmRelaysLoader(user: User): Observable<RelayListState> {
     map((event) => getRelaysFromList(event)),
     relayListStatus((url) =>
       probeRelayAuth(url, user.pubkey).pipe(
-        timeout({ first: AUTH_PROBE_TIMEOUT_MS, with: () => of("unknown" as const) }),
+        timeout({
+          first: AUTH_PROBE_TIMEOUT_MS,
+          with: () => of("unknown" as const),
+        }),
         catchError(() => of("unknown" as const)),
         map((authStatus) => ({ authStatus }) satisfies RelayCapabilities),
       ),
@@ -282,14 +320,18 @@ export function createDmRelaysLoader(user: User): Observable<RelayListState> {
   );
 }
 
-export function createBlockedRelaysLoader(user: User): Observable<RelayListState> {
+export function createBlockedRelaysLoader(
+  user: User,
+): Observable<RelayListState> {
   return loadAddressableEvent(user, kinds.BlockedRelaysList).pipe(
     map((event) => getRelaysFromList(event)),
     relayListStatus(),
   );
 }
 
-export function createKeyPackageRelaysLoader(user: User): Observable<RelayListState> {
+export function createKeyPackageRelaysLoader(
+  user: User,
+): Observable<RelayListState> {
   return loadAddressableEvent(user, KEY_PACKAGE_RELAY_LIST_KIND).pipe(
     map((event) => getRelaysFromList(event)),
     relayListStatus(),
@@ -300,15 +342,27 @@ export function createKeyPackageRelaysLoader(user: User): Observable<RelayListSt
 // Composed loader
 // ---------------------------------------------------------------------------
 
-function streaming(loader: Observable<RelayListState>): Observable<RelayListState> {
-  return loader.pipe(startWith(EMPTY_LIST), catchError(() => of(EMPTY_LIST)));
+function streaming(
+  loader: Observable<RelayListState>,
+): Observable<RelayListState> {
+  return loader.pipe(
+    startWith(EMPTY_LIST),
+    catchError(() => of(EMPTY_LIST)),
+  );
 }
 
-function streamingNip65(loader: Observable<Nip65RelayListState>): Observable<Nip65RelayListState> {
-  return loader.pipe(startWith(EMPTY_NIP65), catchError(() => of(EMPTY_NIP65)));
+function streamingNip65(
+  loader: Observable<Nip65RelayListState>,
+): Observable<Nip65RelayListState> {
+  return loader.pipe(
+    startWith(EMPTY_NIP65),
+    catchError(() => of(EMPTY_NIP65)),
+  );
 }
 
-export default function deadRelaysLoader(user: User): Observable<DeadRelaysState> {
+export default function deadRelaysLoader(
+  user: User,
+): Observable<DeadRelaysState> {
   return combineLatest({
     nip65: streamingNip65(createNip65Loader(user)),
     favoriteRelays: streaming(createFavoriteRelaysLoader(user)),

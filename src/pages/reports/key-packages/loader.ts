@@ -12,12 +12,12 @@
 
 import type { User } from "applesauce-common/casts";
 import { getRelaysFromList } from "applesauce-common/helpers/lists";
-import { relaySet } from "applesauce-core/helpers";
 import type { NostrEvent } from "applesauce-core/helpers";
-import { merge, of, shareReplay, timer, type Observable } from "rxjs";
+import { relaySet } from "applesauce-core/helpers";
+import { onlyEvents } from "applesauce-relay";
+import { EMPTY, merge, type Observable, of, shareReplay, timer } from "rxjs";
 import {
   catchError,
-  filter,
   map,
   scan,
   startWith,
@@ -78,8 +78,7 @@ function parseKeyPackage(
   relayUrl: string | null,
 ): KeyPackage {
   const clientTag = event.tags.find((t) => t[0] === "client");
-  const deviceTag =
-    event.tags.find((t) => t[0] === "device") ??
+  const deviceTag = event.tags.find((t) => t[0] === "device") ??
     event.tags.find((t) => t[0] === "d");
 
   return {
@@ -100,9 +99,12 @@ function requestFromRelay(
     .relay(url)
     .request({ kinds: [KEY_PACKAGE_KIND], authors: [pubkey] })
     .pipe(
-      filter((e): e is NostrEvent => typeof e === "object" && "id" in e),
+      // Select only events
+      onlyEvents(),
+      // Collect event and relay URL
       map((event) => ({ event, relayUrl: url })),
-      catchError(() => of()),
+      // Ignore errors
+      catchError(() => EMPTY),
     );
 }
 
@@ -113,16 +115,19 @@ function requestFromRelay(
 export function createLoader(user: User): Observable<KeyPackagesState> {
   // Step 1: resolve key package relay list (kind:10051)
   const keyPackageRelays$ = merge(
+    // Subscribe to users outboxes first
     user.outboxes$.pipe(
       switchMap((outboxes) =>
+        // Then request the relay list event from the outboxes
         eventLoader({
           kind: KEY_PACKAGE_RELAY_LIST_KIND,
           pubkey: user.pubkey,
           relays: relaySet(outboxes, LOOKUP_RELAYS, DEFAULT_RELAYS),
-        }),
+        })
       ),
       catchError(() => of(null)),
     ),
+    // Request the relay list event from the default and lookup relays
     eventLoader({
       kind: KEY_PACKAGE_RELAY_LIST_KIND,
       pubkey: user.pubkey,
@@ -130,11 +135,16 @@ export function createLoader(user: User): Observable<KeyPackagesState> {
     }).pipe(catchError(() => of(null))),
   ).pipe(
     // Also check the event store cache
-    startWith(eventStore.getReplaceable(KEY_PACKAGE_RELAY_LIST_KIND, user.pubkey) ?? null),
+    startWith(
+      eventStore.getReplaceable(KEY_PACKAGE_RELAY_LIST_KIND, user.pubkey) ??
+        null,
+    ),
+    // Parse the relays from the list
     map((event) => ({
       event,
       urls: event ? getRelaysFromList(event) : [],
     })),
+    // Only make one upstream request
     shareReplay(1),
   );
 
@@ -143,33 +153,34 @@ export function createLoader(user: User): Observable<KeyPackagesState> {
     // From key package relay list relays
     keyPackageRelays$.pipe(
       switchMap(({ urls }) => {
-        if (urls.length === 0) return of();
+        if (urls.length === 0) return EMPTY;
         return merge(...urls.map((url) => requestFromRelay(url, user.pubkey)));
       }),
-      catchError(() => of()),
+      catchError(() => EMPTY),
     ),
-
     // From outbox relays
     user.outboxes$.pipe(
       switchMap((outboxes) => {
         const urls = outboxes ?? [];
-        if (urls.length === 0) return of();
+        if (urls.length === 0) return EMPTY;
+
+        // Request all key package events
         return merge(...urls.map((url) => requestFromRelay(url, user.pubkey)));
       }),
-      catchError(() => of()),
+      catchError(() => EMPTY),
     ),
-
     // From default + lookup relays
     merge(
-      ...[...DEFAULT_RELAYS, ...LOOKUP_RELAYS].map((url) =>
-        requestFromRelay(url, user.pubkey),
+      ...relaySet(DEFAULT_RELAYS, LOOKUP_RELAYS).map((url) =>
+        requestFromRelay(url, user.pubkey)
       ),
-    ).pipe(catchError(() => of())),
+    ).pipe(catchError(() => EMPTY)),
   );
 
   return keyPackageRelays$.pipe(
     switchMap(({ urls: keyPackageRelays }) => {
       return packages$.pipe(
+        // Collect events and relay URLs
         scan(
           (state, { event, relayUrl }) => {
             // Deduplicate by event id
@@ -181,20 +192,27 @@ export function createLoader(user: User): Observable<KeyPackagesState> {
             return { ...state, packages };
           },
           {
-            keyPackageRelays: keyPackageRelays.length > 0 ? keyPackageRelays : null,
+            keyPackageRelays: keyPackageRelays.length > 0
+              ? keyPackageRelays
+              : null,
             packages: [] as KeyPackage[],
             fetching: true,
           } as KeyPackagesState,
         ),
         startWith({
-          keyPackageRelays: keyPackageRelays.length > 0 ? keyPackageRelays : null,
+          keyPackageRelays: keyPackageRelays.length > 0
+            ? keyPackageRelays
+            : null,
           packages: [] as KeyPackage[],
           fetching: true,
         } as KeyPackagesState),
       );
     }),
+    // Catch all errors and return empty state
     catchError(() => of(EMPTY_STATE)),
+    // Hard deadline
     takeUntil(timer(LOADER_TIMEOUT_MS)),
+    // Prevent re-execution on multiple subscribers
     shareReplay(1),
   );
 }

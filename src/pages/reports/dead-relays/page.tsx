@@ -53,11 +53,23 @@ function VerdictBadge({
 
 function SearchBadge({ status }: { status: SearchSupport }) {
   if (status === "supported")
-    return <span className="badge badge-success badge-xs whitespace-nowrap">NIP-50 ✓</span>;
+    return (
+      <span className="badge badge-success badge-xs whitespace-nowrap">
+        NIP-50 ✓
+      </span>
+    );
   if (status === "unsupported")
-    return <span className="badge badge-warning badge-xs whitespace-nowrap">no search</span>;
+    return (
+      <span className="badge badge-warning badge-xs whitespace-nowrap">
+        no search
+      </span>
+    );
   if (status === "unknown")
-    return <span className="badge badge-ghost badge-xs whitespace-nowrap">search?</span>;
+    return (
+      <span className="badge badge-ghost badge-xs whitespace-nowrap">
+        search?
+      </span>
+    );
   return (
     <span className="badge badge-ghost badge-xs gap-1 whitespace-nowrap">
       <span className="loading loading-spinner loading-xs" />
@@ -72,11 +84,23 @@ function SearchBadge({ status }: { status: SearchSupport }) {
 
 function AuthBadge({ status }: { status: AuthStatus }) {
   if (status === "protected")
-    return <span className="badge badge-success badge-xs whitespace-nowrap">auth ✓</span>;
+    return (
+      <span className="badge badge-success badge-xs whitespace-nowrap">
+        auth ✓
+      </span>
+    );
   if (status === "unprotected")
-    return <span className="badge badge-error badge-xs whitespace-nowrap">no auth</span>;
+    return (
+      <span className="badge badge-error badge-xs whitespace-nowrap">
+        no auth
+      </span>
+    );
   if (status === "unknown")
-    return <span className="badge badge-ghost badge-xs whitespace-nowrap">auth?</span>;
+    return (
+      <span className="badge badge-ghost badge-xs whitespace-nowrap">
+        auth?
+      </span>
+    );
   return (
     <span className="badge badge-ghost badge-xs gap-1 whitespace-nowrap">
       <span className="loading loading-spinner loading-xs" />
@@ -90,7 +114,8 @@ function AuthBadge({ status }: { status: AuthStatus }) {
 // ---------------------------------------------------------------------------
 
 function MarkerPill({ marker }: { marker: RelayMarker }) {
-  const label = marker === "both" ? "r+w" : marker === "read" ? "read" : "write";
+  const label =
+    marker === "both" ? "r+w" : marker === "read" ? "read" : "write";
   return <span className="badge badge-ghost badge-xs font-mono">{label}</span>;
 }
 
@@ -115,7 +140,8 @@ function CapabilityWarning({
   if (verdict === "offline") {
     return (
       <p className="text-xs text-error/80 pl-8 pb-1">
-        This relay appears to be offline. You may want to remove it so clients don't waste time connecting to it.
+        This relay appears to be offline. You may want to remove it so clients
+        don't waste time connecting to it.
       </p>
     );
   }
@@ -123,7 +149,9 @@ function CapabilityWarning({
   if (showSearch && searchSupport === "unsupported") {
     return (
       <p className="text-xs text-warning/80 pl-8 pb-1">
-        This relay does not support NIP-50 keyword search. Nostr clients that use your search relay list may get no results here — consider replacing it with a relay that supports search.
+        This relay does not support NIP-50 keyword search. Nostr clients that
+        use your search relay list may get no results here — consider replacing
+        it with a relay that supports search.
       </p>
     );
   }
@@ -131,7 +159,10 @@ function CapabilityWarning({
   if (showAuth && authStatus === "unprotected") {
     return (
       <p className="text-xs text-error/80 pl-8 pb-1">
-        This DM relay does not require authentication before serving messages. Anyone can query it for your encrypted gift-wrap events (kind:1059). Your DM relays should enforce NIP-42 auth to protect your message metadata.
+        This DM relay does not require authentication before serving messages.
+        Anyone can query it for your encrypted gift-wrap events (kind:1059).
+        Your DM relays should enforce NIP-42 auth to protect your message
+        metadata.
       </p>
     );
   }
@@ -193,8 +224,12 @@ function RelayRow({
         className={[
           "flex items-center gap-2 py-2 min-w-0",
           isOffline && !isRemoved ? "border-l-2 border-error pl-2 -ml-0.5" : "",
-          showAuth && authStatus === "unprotected" && !isRemoved ? "border-l-2 border-error pl-2 -ml-0.5" : "",
-          showSearch && searchSupport === "unsupported" && !isRemoved ? "border-l-2 border-warning pl-2 -ml-0.5" : "",
+          showAuth && authStatus === "unprotected" && !isRemoved
+            ? "border-l-2 border-error pl-2 -ml-0.5"
+            : "",
+          showSearch && searchSupport === "unsupported" && !isRemoved
+            ? "border-l-2 border-warning pl-2 -ml-0.5"
+            : "",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -202,9 +237,18 @@ function RelayRow({
         {/* Icon + name */}
         <div className="flex-1 min-w-0 flex items-center gap-2">
           {iconUrl ? (
-            <img src={iconUrl} alt="" className="size-6 rounded shrink-0 object-cover bg-base-200" />
+            <img
+              src={iconUrl}
+              alt=""
+              className="size-6 rounded shrink-0 object-cover bg-base-200"
+            />
           ) : (
-            <div className="size-6 rounded shrink-0 bg-base-200 flex items-center justify-center text-base-content/40 text-[10px] font-mono" aria-hidden>…</div>
+            <div
+              className="size-6 rounded shrink-0 bg-base-200 flex items-center justify-center text-base-content/40 text-[10px] font-mono"
+              aria-hidden
+            >
+              …
+            </div>
           )}
           <div className="min-w-0 flex flex-col gap-0">
             <span className="font-medium text-sm text-base-content truncate leading-tight">
@@ -219,12 +263,8 @@ function RelayRow({
         {/* Badges */}
         <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
           {marker && <MarkerPill marker={marker} />}
-          {showSearch && (
-            <SearchBadge status={searchSupport} />
-          )}
-          {showAuth && (
-            <AuthBadge status={authStatus} />
-          )}
+          {showSearch && <SearchBadge status={searchSupport} />}
+          {showAuth && <AuthBadge status={authStatus} />}
           <VerdictBadge verdict={entry.verdict} isChecking={isChecking} />
         </div>
 
@@ -239,8 +279,18 @@ function RelayRow({
             aria-label={`Queue removal of ${entry.url}`}
             title="Remove from list"
           >
-            <svg className="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            <svg
+              className="size-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+              />
             </svg>
           </button>
         )}
@@ -413,9 +463,12 @@ function ListSection({
 // Helpers
 // ---------------------------------------------------------------------------
 
-function countOffline(state: RelayListState | Nip65RelayListState | null | undefined): number {
+function countOffline(
+  state: RelayListState | Nip65RelayListState | null | undefined,
+): number {
   if (!state?.urls) return 0;
-  return state.urls.filter((url) => state.entries[url]?.verdict === "offline").length;
+  return state.urls.filter((url) => state.entries[url]?.verdict === "offline")
+    .length;
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +592,9 @@ export function ReportContent({
         <div className="flex items-center gap-3">
           <span className="loading loading-spinner loading-sm text-primary" />
           <p className="text-sm text-base-content/60">
-            {hasAnyRelays ? "Checking relay connectivity…" : "Loading relay lists…"}
+            {hasAnyRelays
+              ? "Checking relay connectivity…"
+              : "Loading relay lists…"}
           </p>
         </div>
         {hasAnyRelays && content}
@@ -584,14 +639,25 @@ export function ReportContent({
       {/* Summary */}
       {totalOffline === 0 ? (
         <div className="flex items-center gap-2 text-success">
-          <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          <svg
+            className="size-4 shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5 13l4 4L19 7"
+            />
           </svg>
           <p className="text-sm font-medium">All relays online</p>
         </div>
       ) : (
         <p className="text-sm text-warning">
-          {totalOffline} offline relay{totalOffline !== 1 ? "s" : ""} found — click the trash icon to queue removal.
+          {totalOffline} offline relay{totalOffline !== 1 ? "s" : ""} found —
+          click the trash icon to queue removal.
         </p>
       )}
 

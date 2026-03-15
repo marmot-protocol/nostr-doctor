@@ -123,9 +123,15 @@ export function ReportContent({
     if (!isLoading && !reported) {
       setReported(true);
       if (relayUrls === null) {
-        onDone({ status: "notfound", summary: "No key package relay list found" });
+        onDone({
+          status: "notfound",
+          summary: "No key package relay list found",
+        });
       } else if (urlList.length === 0) {
-        onDone({ status: "notfound", summary: "Key package relay list is empty" });
+        onDone({
+          status: "notfound",
+          summary: "Key package relay list is empty",
+        });
       } else if (offlineCount > 0) {
         onDone({
           status: "error",
@@ -231,10 +237,15 @@ export function ReportContent({
             stroke="currentColor"
             strokeWidth={2.5}
           >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5 13l4 4L19 7"
+            />
           </svg>
           <p className="text-sm font-medium">
-            All {urlList.length} key package relay{urlList.length !== 1 ? "s" : ""} online
+            All {urlList.length} key package relay
+            {urlList.length !== 1 ? "s" : ""} online
           </p>
         </div>
       ) : offlineCount > 0 ? (

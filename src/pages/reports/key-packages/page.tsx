@@ -84,7 +84,10 @@ function KeyPackageCard({
           ].join(" ")}
         >
           <svg
-            className={["size-5", isDeleted ? "text-base-content/30" : "text-primary"].join(" ")}
+            className={[
+              "size-5",
+              isDeleted ? "text-base-content/30" : "text-primary",
+            ].join(" ")}
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -103,7 +106,14 @@ function KeyPackageCard({
           <div className="flex items-start justify-between gap-2 flex-wrap">
             <div className="min-w-0">
               {label ? (
-                <p className={["text-sm font-semibold truncate", isDeleted ? "line-through text-base-content/40" : "text-base-content"].join(" ")}>
+                <p
+                  className={[
+                    "text-sm font-semibold truncate",
+                    isDeleted
+                      ? "line-through text-base-content/40"
+                      : "text-base-content",
+                  ].join(" ")}
+                >
                   {label}
                 </p>
               ) : (
@@ -148,10 +158,14 @@ function KeyPackageCard({
             <button
               className={[
                 "btn btn-ghost btn-xs",
-                isQueued ? "text-error bg-error/10" : "text-base-content/30 hover:text-error hover:bg-error/10",
+                isQueued
+                  ? "text-error bg-error/10"
+                  : "text-base-content/30 hover:text-error hover:bg-error/10",
               ].join(" ")}
               onClick={() => onDelete(pkg)}
-              aria-label={isQueued ? "Remove from deletion queue" : "Queue for deletion"}
+              aria-label={
+                isQueued ? "Remove from deletion queue" : "Queue for deletion"
+              }
               title={isQueued ? "Click to deselect" : "Queue for deletion"}
             >
               <TrashIcon />
@@ -174,7 +188,11 @@ function KeyPackageCard({
               stroke="currentColor"
               strokeWidth={2}
             >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M19 9l-7 7-7-7"
+              />
             </svg>
           </button>
         </div>
@@ -395,14 +413,26 @@ export function ReportContent({
       {/* Summary line */}
       {packages.length > 0 ? (
         <div className="flex items-center gap-2 text-success">
-          <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          <svg
+            className="size-4 shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5 13l4 4L19 7"
+            />
           </svg>
           <p className="text-sm font-medium">
-            {packages.length} key package{packages.length !== 1 ? "s" : ""} found
+            {packages.length} key package{packages.length !== 1 ? "s" : ""}{" "}
+            found
             {queuedIds.size > 0 && (
               <span className="text-base-content/50 font-normal">
-                {" "}· {queuedIds.size} queued for deletion
+                {" "}
+                · {queuedIds.size} queued for deletion
               </span>
             )}
           </p>
@@ -428,12 +458,16 @@ export function ReportContent({
       {/* Queue hint */}
       {queuedIds.size > 0 && (
         <p className="text-xs text-base-content/40 text-center">
-          {queuedIds.size} package{queuedIds.size !== 1 ? "s" : ""} will be deleted when you continue — as a single NIP-09 event.
+          {queuedIds.size} package{queuedIds.size !== 1 ? "s" : ""} will be
+          deleted when you continue — as a single NIP-09 event.
         </p>
       )}
 
       {!isDoneSection && (
-        <button className="btn btn-primary btn-sm w-full" onClick={handleContinue}>
+        <button
+          className="btn btn-primary btn-sm w-full"
+          onClick={handleContinue}
+        >
           {queuedIds.size > 0
             ? `Queue ${queuedIds.size} deletion${queuedIds.size !== 1 ? "s" : ""} & Continue`
             : "Continue"}

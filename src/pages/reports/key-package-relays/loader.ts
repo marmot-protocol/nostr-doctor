@@ -23,7 +23,10 @@ import {
   switchMap,
   takeUntil,
 } from "rxjs/operators";
-import { relayVerdict, type RelayVerdict } from "../../../lib/relay-monitors.ts";
+import {
+  relayVerdict,
+  type RelayVerdict,
+} from "../../../lib/relay-monitors.ts";
 import { DEFAULT_RELAYS, LOOKUP_RELAYS } from "../../../lib/relay.ts";
 import { eventLoader } from "../../../lib/store.ts";
 import { LOADER_TIMEOUT_MS } from "../../../lib/timeouts.ts";
@@ -54,9 +57,7 @@ const EMPTY_STATE: KeyPackageRelayListState = {
 // Loader
 // ---------------------------------------------------------------------------
 
-export function createLoader(
-  user: User,
-): Observable<KeyPackageRelayListState> {
+export function createLoader(user: User): Observable<KeyPackageRelayListState> {
   // Load kind:10051 from outboxes + lookup + default relays
   const event$ = merge(
     user.outboxes$.pipe(
