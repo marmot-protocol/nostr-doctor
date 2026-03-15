@@ -78,7 +78,8 @@ function parseKeyPackage(
   relayUrl: string | null,
 ): KeyPackage {
   const clientTag = event.tags.find((t) => t[0] === "client");
-  const deviceTag = event.tags.find((t) => t[0] === "device") ??
+  const deviceTag =
+    event.tags.find((t) => t[0] === "device") ??
     event.tags.find((t) => t[0] === "d");
 
   return {
@@ -123,7 +124,7 @@ export function createLoader(user: User): Observable<KeyPackagesState> {
           kind: KEY_PACKAGE_RELAY_LIST_KIND,
           pubkey: user.pubkey,
           relays: relaySet(outboxes, LOOKUP_RELAYS, DEFAULT_RELAYS),
-        })
+        }),
       ),
       catchError(() => of(null)),
     ),
@@ -172,7 +173,7 @@ export function createLoader(user: User): Observable<KeyPackagesState> {
     // From default + lookup relays
     merge(
       ...relaySet(DEFAULT_RELAYS, LOOKUP_RELAYS).map((url) =>
-        requestFromRelay(url, user.pubkey)
+        requestFromRelay(url, user.pubkey),
       ),
     ).pipe(catchError(() => EMPTY)),
   );
@@ -192,17 +193,15 @@ export function createLoader(user: User): Observable<KeyPackagesState> {
             return { ...state, packages };
           },
           {
-            keyPackageRelays: keyPackageRelays.length > 0
-              ? keyPackageRelays
-              : null,
+            keyPackageRelays:
+              keyPackageRelays.length > 0 ? keyPackageRelays : null,
             packages: [] as KeyPackage[],
             fetching: true,
           } as KeyPackagesState,
         ),
         startWith({
-          keyPackageRelays: keyPackageRelays.length > 0
-            ? keyPackageRelays
-            : null,
+          keyPackageRelays:
+            keyPackageRelays.length > 0 ? keyPackageRelays : null,
           packages: [] as KeyPackage[],
           fetching: true,
         } as KeyPackagesState),

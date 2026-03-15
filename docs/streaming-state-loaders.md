@@ -294,6 +294,36 @@ urlList$.pipe(
 
 ---
 
+### `combineLatestByValue` — best default for string/URL lists
+
+For source arrays that are "lists of values" (URLs, relay domains, pubkeys),
+prefer `combineLatestByValue` over `switchMap(() => merge(...)) + scan(...)`.
+It keeps one branch per unique value and gives you a `Map<value, result>` that
+is already keyed for UI/state shaping.
+
+```ts
+urlList$.pipe(
+  combineLatestByValue((url) =>
+    checkUrl(url).pipe(
+      catchError(() => of("offline")), // per-item failures stay local
+      startWith(null), // optional: emit loading value immediately
+    ),
+  ),
+  map((statusByUrl) => Object.fromEntries(statusByUrl.entries())),
+);
+```
+
+**Why prefer it for lists:**
+
+- avoids manual patch objects and `scan` reducers for keyed list state
+- keeps stable subscriptions by value when list emissions repeat
+- produces clearer pipelines (one line per concern, less imperative glue)
+
+Use `combineLatestByIndex` when identity is array position. Use
+`combineLatestByValue` when identity is the value itself.
+
+---
+
 ### `combineLatestByKey` — same as `combineLatestByIndex` but key-based
 
 For typed arrays where items have a stable identity field. Instead of array
