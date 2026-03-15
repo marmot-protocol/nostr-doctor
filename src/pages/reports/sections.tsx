@@ -16,6 +16,9 @@ import { ReportContent as FollowListRelaysContent } from "./follow-list-relays/p
 import { createLoader as createMetadataBroadcastLoader } from "./metadata-broadcast/loader.ts";
 import { ReportContent as MetadataBroadcastContent } from "./metadata-broadcast/page.tsx";
 
+import { createLoader as createLegacyListsLoader } from "./legacy-lists/loader.ts";
+import { ReportContent as LegacyListsContent } from "./legacy-lists/page.tsx";
+
 import { createLoader as createKeyPackagesLoader } from "./key-packages/loader.ts";
 import { ReportContent as KeyPackagesContent } from "./key-packages/page.tsx";
 
@@ -49,6 +52,14 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     description: "Checks whether your metadata events are on all your relays",
     createLoader: createMetadataBroadcastLoader,
     Component: MetadataBroadcastContent,
+  },
+  {
+    name: "legacy-lists",
+    label: "Legacy Lists",
+    description:
+      "Checks for deprecated NIP-51 list formats and helps migrate or remove them",
+    createLoader: createLegacyListsLoader,
+    Component: LegacyListsContent,
   },
   {
     name: "key-packages",
