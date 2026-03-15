@@ -494,8 +494,7 @@ export function ReportContent({
       (state.favoriteRelays.urls?.length ?? 0) > 0 ||
       (state.searchRelays.urls?.length ?? 0) > 0 ||
       (state.dmRelays.urls?.length ?? 0) > 0 ||
-      (state.blockedRelays.urls?.length ?? 0) > 0 ||
-      (state.keyPackageRelays.urls?.length ?? 0) > 0
+      (state.blockedRelays.urls?.length ?? 0) > 0
     );
   }, [state]);
 
@@ -506,8 +505,7 @@ export function ReportContent({
       countOffline(state.favoriteRelays) +
       countOffline(state.searchRelays) +
       countOffline(state.dmRelays) +
-      countOffline(state.blockedRelays) +
-      countOffline(state.keyPackageRelays)
+      countOffline(state.blockedRelays)
     );
   }, [state]);
 
@@ -521,8 +519,7 @@ export function ReportContent({
         (state?.favoriteRelays.urls?.length ?? 0) +
         (state?.searchRelays.urls?.length ?? 0) +
         (state?.dmRelays.urls?.length ?? 0) +
-        (state?.blockedRelays.urls?.length ?? 0) +
-        (state?.keyPackageRelays.urls?.length ?? 0);
+        (state?.blockedRelays.urls?.length ?? 0);
       onDone({
         status: totalOffline > 0 ? "error" : "clean",
         summary:
@@ -575,12 +572,6 @@ export function ReportContent({
         label="Blocked Relays"
         eventKind={10006}
         state={state?.blockedRelays}
-        {...commonProps}
-      />
-      <ListSection
-        label="Key Package Relays"
-        eventKind={10051}
-        state={state?.keyPackageRelays}
         {...commonProps}
       />
     </div>

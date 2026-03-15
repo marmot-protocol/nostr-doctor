@@ -10,14 +10,17 @@ import { ReportContent as ProfileMetadataContent } from "./profile-metadata/page
 import deadRelaysLoader from "./dead-relays/loader.ts";
 import { ReportContent as DeadRelaysContent } from "./dead-relays/page.tsx";
 
+import { createLoader as createKeyPackageRelaysLoader } from "./key-package-relays/loader.ts";
+import { ReportContent as KeyPackageRelaysContent } from "./key-package-relays/page.tsx";
+
 import { createLoader as createFollowListRelaysLoader } from "./follow-list-relays/loader.ts";
 import { ReportContent as FollowListRelaysContent } from "./follow-list-relays/page.tsx";
 
 import { createLoader as createMetadataBroadcastLoader } from "./metadata-broadcast/loader.ts";
 import { ReportContent as MetadataBroadcastContent } from "./metadata-broadcast/page.tsx";
 
-import { createLoader as createLegacyListsLoader } from "./legacy-lists/loader.ts";
-import { ReportContent as LegacyListsContent } from "./legacy-lists/page.tsx";
+import { createLoader as createBlossomServersLoader } from "./blossom-servers/loader.ts";
+import { ReportContent as BlossomServersContent } from "./blossom-servers/page.tsx";
 
 import { createLoader as createKeyPackagesLoader } from "./key-packages/loader.ts";
 import { ReportContent as KeyPackagesContent } from "./key-packages/page.tsx";
@@ -42,9 +45,17 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     name: "relay-health",
     label: "Relay Health",
     description:
-      "Checks connectivity, NIP-50 search, and DM auth across all your relay lists",
+      "Checks connectivity, NIP-50 search, and DM auth across your main relay lists",
     createLoader: deadRelaysLoader,
     Component: DeadRelaysContent,
+  },
+  {
+    name: "marmot-key-package-relays",
+    label: "Marmot Key Package Relays",
+    description:
+      "Checks key package relays for connectivity and NIP-09 (delete/event kind 5) support",
+    createLoader: createKeyPackageRelaysLoader,
+    Component: KeyPackageRelaysContent,
   },
   {
     name: "metadata-broadcast",
@@ -54,12 +65,11 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     Component: MetadataBroadcastContent,
   },
   {
-    name: "legacy-lists",
-    label: "Legacy Lists",
-    description:
-      "Checks for deprecated NIP-51 list formats and helps migrate or remove them",
-    createLoader: createLegacyListsLoader,
-    Component: LegacyListsContent,
+    name: "blossom-servers",
+    label: "Blossom Servers",
+    description: "Checks whether your Blossom servers respond to HTTP GET /",
+    createLoader: createBlossomServersLoader,
+    Component: BlossomServersContent,
   },
   {
     name: "key-packages",
