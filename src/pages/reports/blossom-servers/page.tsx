@@ -121,6 +121,7 @@ export function ReportContent({
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishSuccess, setPublishSuccess] = useState<string | null>(null);
+  const [removedUrls, setRemovedUrls] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!isLoading && !reported) {
@@ -237,7 +238,9 @@ export function ReportContent({
   }
 
   const isReadOnly = account === null;
-  const offlineUrls = urlList.filter((url) => statusByUrl[url] === "offline");
+  const offlineUrls = urlList
+    .filter((url) => statusByUrl[url] === "offline")
+    .filter((url) => !removedUrls.has(url));
 
   async function handleRemoveOfflineServers() {
     if (offlineUrls.length === 0) return;
@@ -266,6 +269,11 @@ export function ReportContent({
       setPublishSuccess(
         `Queued removal of ${offlineUrls.length} offline server${offlineUrls.length !== 1 ? "s" : ""}.`,
       );
+      setRemovedUrls((prev) => {
+        const next = new Set(prev);
+        offlineUrls.forEach((url) => next.add(url));
+        return next;
+      });
       onDone({
         status: "fixed",
         summary: `Queued removal of ${offlineUrls.length} offline server${offlineUrls.length !== 1 ? "s" : ""}`,

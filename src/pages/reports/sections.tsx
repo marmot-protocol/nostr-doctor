@@ -53,7 +53,7 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     name: "marmot-key-package-relays",
     label: "Marmot Key Package Relays",
     description:
-      "Checks key package relays for connectivity and kind:9 delete support",
+      "Checks key package relays for connectivity and NIP-09 (delete/event kind 5) support",
     createLoader: createKeyPackageRelaysLoader,
     Component: KeyPackageRelaysContent,
   },
