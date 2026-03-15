@@ -186,7 +186,7 @@ function LegacyListRow({
         }
       }
 
-      // 1. Publish updated modern list
+      // 1. Build and dispatch modern list update (fire-and-forget)
       const modernDraft = modernEvent
         ? await factory.modify(
             modernEvent,
@@ -196,15 +196,15 @@ function LegacyListRow({
             { kind: modernKind },
             modifyPublicTags(() => newTags),
           );
-      await publishEvent(modernDraft);
+      publishEvent(modernDraft);
 
-      // 2. Publish kind:5 deletion event — trust relays to remove the legacy list
+      // 2. Build and dispatch kind:5 deletion event (fire-and-forget)
       const coord = legacyCoordinate(listKey, pubkey);
       const deleteDraft = await factory.build({
         kind: 5,
         tags: [["a", coord]],
       });
-      await publishEvent(deleteDraft);
+      publishEvent(deleteDraft);
 
       setDone(true);
       onHandled();
@@ -220,13 +220,13 @@ function LegacyListRow({
     setDeleting(true);
     setError(null);
     try {
-      // Publish kind:5 deletion event — trust relays to remove the legacy list
+      // Build and dispatch kind:5 deletion event (fire-and-forget)
       const coord = legacyCoordinate(listKey, pubkey);
       const deleteDraft = await factory.build({
         kind: 5,
         tags: [["a", coord]],
       });
-      await publishEvent(deleteDraft);
+      publishEvent(deleteDraft);
 
       setDone(true);
       onHandled();
@@ -398,7 +398,10 @@ export function ReportContent({
   useEffect(() => {
     if (isClean && !doneFired.current) {
       doneFired.current = true;
-      onDone({ status: "clean", summary: "No legacy NIP-51 lists found" });
+      const timer = setTimeout(() => {
+        onDone({ status: "clean", summary: "No legacy NIP-51 lists found" });
+      }, 1500);
+      return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isClean]);
@@ -425,11 +428,24 @@ export function ReportContent({
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-3 py-2">
-        <span className="loading loading-spinner loading-sm text-primary" />
-        <p className="text-sm text-base-content/60">
-          Checking for legacy NIP-51 lists…
-        </p>
+      <div className="flex flex-col gap-4 py-2">
+        <div className="flex items-center gap-3">
+          <span className="loading loading-spinner loading-sm text-primary" />
+          <p className="text-sm text-base-content/60">
+            Checking for legacy NIP-51 lists…
+          </p>
+        </div>
+        {!isDoneSection && (
+          <button
+            className="btn btn-ghost btn-sm w-full"
+            onClick={() => {
+              onDone({ status: "skipped", summary: "Skipped" });
+              onContinue();
+            }}
+          >
+            Skip
+          </button>
+        )}
       </div>
     );
   }
