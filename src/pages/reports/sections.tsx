@@ -22,6 +22,9 @@ import { ReportContent as MetadataBroadcastContent } from "./metadata-broadcast/
 import { createLoader as createBlossomServersLoader } from "./blossom-servers/loader.ts";
 import { ReportContent as BlossomServersContent } from "./blossom-servers/page.tsx";
 
+import { createLoader as createLegacyListsLoader } from "./legacy-lists/loader.ts";
+import { ReportContent as LegacyListsContent } from "./legacy-lists/page.tsx";
+
 import { createLoader as createKeyPackagesLoader } from "./key-packages/loader.ts";
 import { ReportContent as KeyPackagesContent } from "./key-packages/page.tsx";
 
@@ -70,6 +73,14 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     description: "Checks whether your Blossom servers respond to HTTP GET /",
     createLoader: createBlossomServersLoader,
     Component: BlossomServersContent,
+  },
+  {
+    name: "legacy-lists",
+    label: "Legacy Lists",
+    description:
+      "Checks for deprecated NIP-51 list formats and helps migrate or remove them",
+    createLoader: createLegacyListsLoader,
+    Component: LegacyListsContent,
   },
   {
     name: "key-packages",
