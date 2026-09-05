@@ -51,9 +51,9 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
   },
   {
     name: "marmot-key-package-relays",
-    label: "Marmot Key Package Relays",
+    label: "Marmot Relay Discovery",
     description:
-      "Checks key package relays for connectivity and NIP-09 (delete/event kind 5) support",
+      "Separates current NIP-65 and kind 10050 inbox diagnostics from legacy kind 10051 relay health",
     createLoader: createKeyPackageRelaysLoader,
     Component: KeyPackageRelaysContent,
   },
@@ -73,9 +73,9 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
   },
   {
     name: "key-packages",
-    label: "Key Packages",
+    label: "Marmot KeyPackages",
     description:
-      "Looks for MLS key packages (kind:443) across your key package relays",
+      "Diagnoses current addressable kind 30443 publication slots and separately reports legacy kind 443 events",
     createLoader: createKeyPackagesLoader,
     Component: KeyPackagesContent,
   },
