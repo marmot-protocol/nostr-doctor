@@ -51,3 +51,6 @@ export const BROADCAST_TIMEOUT_MS = 25_000;
  * and why it matters before moving on.
  */
 export const AUTO_ADVANCE_MS = 3_000;
+
+/** Hard per-package worker budget; termination also cancels stalled crypto work. */
+export const KEY_PACKAGE_VALIDATION_TIMEOUT_MS = 5_000;

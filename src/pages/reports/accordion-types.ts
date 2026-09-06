@@ -13,6 +13,7 @@ export type SectionStatus =
   | "fixed"
   | "skipped"
   | "notfound"
+  | "warning"
   | "error";
 
 export type SectionOutcome = {

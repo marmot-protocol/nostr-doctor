@@ -1,131 +1,170 @@
-// ---------------------------------------------------------------------------
-// Key Package Relay List loader (kind:10051)
-//
-// Fetches the subject's key package relay list (kind:10051), then checks
-// each relay for:
-//   1. online/offline verdict using NIP-66 monitors
-//   2. kind:9 delete support via relay `supported_nips` metadata
-//
-// State streams incrementally:
-//   1. Relay URLs arrive once the kind:10051 event is found (or null if not found)
-//   2. Per-relay verdicts fill in as monitors respond
-//
-// The page layer applies takeUntil(timer(N)) + toLoaderState().
-// ---------------------------------------------------------------------------
-
 import type { User } from "applesauce-common/casts";
-import { getRelaysFromList } from "applesauce-common/helpers/lists";
 import { relaySet } from "applesauce-core/helpers";
-import { merge, of, shareReplay, timer, type Observable } from "rxjs";
 import {
   catchError,
+  combineLatest,
+  defer,
+  distinctUntilChanged,
   map,
+  of,
+  shareReplay,
   startWith,
-  switchMap,
   takeUntil,
-} from "rxjs/operators";
+  timer,
+} from "rxjs";
 import {
   relayVerdict,
   type RelayVerdict,
 } from "../../../lib/relay-monitors.ts";
-import { DEFAULT_RELAYS, LOOKUP_RELAYS, pool } from "../../../lib/relay.ts";
-import { eventLoader } from "../../../lib/store.ts";
+import { LOOKUP_RELAYS, pool } from "../../../lib/relay.ts";
 import { LOADER_TIMEOUT_MS } from "../../../lib/timeouts.ts";
-import { combineLatestBy } from "../../../observable/operator/combine-latest-by.ts";
 import { combineLatestByValue } from "../../../observable/operator/combine-latest-by-value.ts";
+import {
+  discoverNip65,
+  discoverRelayList,
+  EMPTY_RELAY_LIST,
+  requestRelayEvents,
+} from "../marmot-loaders.ts";
+import {
+  CURRENT_INBOX_RELAYS_KIND,
+  GIFT_WRAP_KIND,
+} from "../marmot-diagnostics.ts";
 
-// ---------------------------------------------------------------------------
-// Kind constant — key package relay list
-// ---------------------------------------------------------------------------
-
-export const KEY_PACKAGE_RELAY_LIST_KIND = 10051;
-export const DELETE_EVENT_KIND = 9;
-
-// ---------------------------------------------------------------------------
-// State types
-// ---------------------------------------------------------------------------
-
-export type DeleteSupport = "supported" | "unsupported" | "unknown" | null;
-
+export type DeleteSupport = "advertised" | "not-advertised" | "unknown";
+export type WriteRelayDiagnostic = {
+  verdict: RelayVerdict;
+  deleteSupport: DeleteSupport;
+};
+export type RelayDiagnostic = {
+  verdict: RelayVerdict;
+  giftWrapCount: number;
+  giftWrapRetrieval:
+    | "observed"
+    | "empty"
+    | "error"
+    | "unknown"
+    | "auth-required";
+  invalidEvents: number;
+};
+export const UNKNOWN_DIAGNOSTIC: RelayDiagnostic = {
+  verdict: "unknown",
+  giftWrapCount: 0,
+  giftWrapRetrieval: "unknown",
+  invalidEvents: 0,
+};
 export type KeyPackageRelayListState = {
-  /** Relay URLs from kind:10051. null = event not found / still loading. */
-  relayUrls: string[] | null;
-  /** Per-relay online verdict. null = verdict still in progress. */
-  verdicts: Record<string, RelayVerdict | null>;
-  /** Per-relay kind:9 support from supported_nips. null = still loading. */
-  deleteSupport: Record<string, DeleteSupport>;
+  nip65WriteRelays: string[];
+  invalidWriteUrls: string[];
+  invalidInboxUrls: string[];
+  discoveryComplete: boolean;
+  writeRelays: Record<string, WriteRelayDiagnostic>;
+  currentInboxRelayUrls: string[] | null | undefined;
+  currentRelays: Record<string, RelayDiagnostic>;
 };
 
-const EMPTY_STATE: KeyPackageRelayListState = {
-  relayUrls: null,
-  verdicts: {},
-  deleteSupport: {},
-};
-
-// ---------------------------------------------------------------------------
-// Loader
-// ---------------------------------------------------------------------------
-
-export function createLoader(user: User): Observable<KeyPackageRelayListState> {
-  // Load kind:10051 from outboxes + lookup + default relays
-  const event$ = merge(
-    user.outboxes$.pipe(
-      switchMap((outboxes) =>
-        eventLoader({
-          kind: KEY_PACKAGE_RELAY_LIST_KIND,
-          pubkey: user.pubkey,
-          relays: relaySet(outboxes, LOOKUP_RELAYS, DEFAULT_RELAYS),
-        }),
+function monitorVerdict(url: string) {
+  return defer(() => relayVerdict(url)).pipe(
+    catchError(() => of("unknown" as RelayVerdict)),
+    startWith("unknown" as RelayVerdict),
+  );
+}
+function inspectWriteRelay(url: string) {
+  return combineLatest({
+    verdict: monitorVerdict(url),
+    deleteSupport: defer(() => pool.relay(url).supported$).pipe(
+      map(
+        (nips): DeleteSupport =>
+          !Array.isArray(nips)
+            ? "unknown"
+            : nips.includes(9)
+              ? "advertised"
+              : "not-advertised",
       ),
-      catchError(() => of(null)),
+      catchError(() => of("unknown" as DeleteSupport)),
+      startWith("unknown" as DeleteSupport),
     ),
-    eventLoader({
-      kind: KEY_PACKAGE_RELAY_LIST_KIND,
-      pubkey: user.pubkey,
-      relays: relaySet(LOOKUP_RELAYS, DEFAULT_RELAYS),
-    }).pipe(catchError(() => of(null))),
+  });
+}
+function inspectInboxRelay(url: string, pubkey: string) {
+  return combineLatest({
+    verdict: monitorVerdict(url),
+    giftWraps: requestRelayEvents(url, {
+      kinds: [GIFT_WRAP_KIND],
+      "#p": [pubkey],
+    }).pipe(
+      startWith({
+        relayUrl: url,
+        events: [],
+        error: false,
+        complete: false,
+        invalidEvents: 0,
+        authRequired: false,
+      }),
+    ),
+  }).pipe(
+    map(
+      ({ verdict, giftWraps }): RelayDiagnostic => ({
+        verdict,
+        giftWrapCount: giftWraps.events.length,
+        invalidEvents: giftWraps.invalidEvents ?? 0,
+        giftWrapRetrieval: giftWraps.authRequired
+          ? "auth-required"
+          : giftWraps.error
+            ? "error"
+            : giftWraps.events.length > 0
+              ? "observed"
+              : giftWraps.complete && !giftWraps.invalidEvents
+                ? "empty"
+                : "unknown",
+      }),
+    ),
+  );
+}
+
+export function createLoader(user: User) {
+  const nip65$ = discoverNip65(user);
+  const outboxes$ = nip65$.pipe(
+    map((list) => relaySet(list.urls)),
+    distinctUntilChanged((a, b) => a.join() === b.join()),
+  );
+  const hints$ = outboxes$.pipe(map((urls) => relaySet(urls, LOOKUP_RELAYS)));
+  const inbox$ = discoverRelayList(
+    user.pubkey,
+    CURRENT_INBOX_RELAYS_KIND,
+    hints$,
+  );
+  const writeChecks$ = outboxes$.pipe(
+    combineLatestByValue(inspectWriteRelay),
+    startWith(new Map<string, WriteRelayDiagnostic>()),
+  );
+  const inboxChecks$ = inbox$.pipe(
+    map((list) => relaySet(list.urls)),
+    combineLatestByValue((url) => inspectInboxRelay(url, user.pubkey)),
+    startWith(new Map<string, RelayDiagnostic>()),
   );
 
-  return event$.pipe(
-    map((event) => (event ? getRelaysFromList(event) : [])),
-    // For each relay list, break into multiple streams
-    combineLatestBy({
-      // Pass through relay URLs
-      relayUrls: map((urls) => urls),
-      // Check online verdicts for each relay
-      verdicts: combineLatestByValue((url) =>
-        relayVerdict(url).pipe(
-          catchError(() => of("unknown" as RelayVerdict)),
-          // Ensure each relay branch emits immediately.
-          startWith(null as RelayVerdict | null),
-        ),
-      ),
-      // Check kind:9 support for each relay
-      deleteSupport: combineLatestByValue((url) =>
-        pool.relay(url).supported$.pipe(
-          map((supportedNips) => {
-            if (!Array.isArray(supportedNips)) return "unknown";
-            return supportedNips.includes(DELETE_EVENT_KIND)
-              ? "supported"
-              : "unsupported";
-          }),
-          catchError(() => of("unknown" as DeleteSupport)),
-          // Ensure each relay branch emits immediately.
-          startWith(null as DeleteSupport),
-        ),
-      ),
-    }),
-    // Convert map results to objects
-    map(({ relayUrls, verdicts, deleteSupport }) => ({
-      relayUrls,
-      verdicts: Object.fromEntries(verdicts.entries()),
-      deleteSupport: Object.fromEntries(deleteSupport.entries()),
-    })),
-    // Catch all errors and return empty state
-    catchError(() => of(EMPTY_STATE)),
-    // Hard deadline
+  return combineLatest({
+    nip65: nip65$.pipe(startWith(EMPTY_RELAY_LIST)),
+    inbox: inbox$.pipe(startWith(EMPTY_RELAY_LIST)),
+    writes: writeChecks$,
+    inboxes: inboxChecks$,
+  }).pipe(
+    map(
+      ({ nip65, inbox, writes, inboxes }): KeyPackageRelayListState => ({
+        nip65WriteRelays: relaySet(nip65.urls),
+        invalidWriteUrls: nip65.invalidUrls,
+        invalidInboxUrls: inbox.invalidUrls,
+        discoveryComplete: nip65.complete && inbox.complete,
+        writeRelays: Object.fromEntries(writes),
+        currentInboxRelayUrls: inbox.event
+          ? relaySet(inbox.urls)
+          : inbox.complete
+            ? null
+            : undefined,
+        currentRelays: Object.fromEntries(inboxes),
+      }),
+    ),
     takeUntil(timer(LOADER_TIMEOUT_MS)),
-    // Prevent re-execution on multiple subscribers
     shareReplay(1),
   );
 }

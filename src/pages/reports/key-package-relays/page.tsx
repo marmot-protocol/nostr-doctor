@@ -1,132 +1,52 @@
 import { useEffect, useMemo, useState } from "react";
-import { use$ } from "applesauce-react/hooks";
-import { pool } from "../../../lib/relay.ts";
+import { marmotRelayOutcome } from "../marmot-outcomes.ts";
 import type { SectionProps } from "../accordion-types.ts";
-import type { DeleteSupport, KeyPackageRelayListState } from "./loader.ts";
-import type { RelayVerdict } from "../../../lib/relay-monitors.ts";
-
-// ---------------------------------------------------------------------------
-// VerdictBadge
-// ---------------------------------------------------------------------------
-
-function VerdictBadge({
-  verdict,
-  isChecking,
-}: {
-  verdict: RelayVerdict | null | undefined;
-  isChecking: boolean;
-}) {
-  if (verdict === "offline")
-    return <span className="badge badge-error badge-sm">offline</span>;
-  if (verdict === "online")
-    return <span className="badge badge-success badge-sm">online</span>;
-  if (!isChecking)
-    return <span className="badge badge-ghost badge-sm">unknown</span>;
-  return (
-    <span className="badge badge-ghost badge-sm gap-1">
-      <span className="loading loading-spinner loading-xs" />
-      checking
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// DeleteSupportBadge
-// ---------------------------------------------------------------------------
-
-function DeleteSupportBadge({
-  deleteSupport,
-  isChecking,
-}: {
-  deleteSupport: DeleteSupport | undefined;
-  isChecking: boolean;
-}) {
-  if (deleteSupport === "supported")
-    return (
-      <span className="badge badge-success badge-sm">event deletions</span>
-    );
-  if (deleteSupport === "unsupported")
-    return <span className="badge badge-warning badge-sm">no deletions</span>;
-  if (!isChecking)
-    return <span className="badge badge-ghost badge-sm">deletions?</span>;
-  return (
-    <span className="badge badge-ghost badge-sm gap-1">
-      <span className="loading loading-spinner loading-xs" />
-      deletions
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// RelayRow
-// ---------------------------------------------------------------------------
+import {
+  UNKNOWN_DIAGNOSTIC,
+  type KeyPackageRelayListState,
+  type RelayDiagnostic,
+} from "./loader.ts";
 
 function RelayRow({
   relayUrl,
-  verdict,
-  deleteSupport,
-  isChecking,
+  diagnostic,
 }: {
   relayUrl: string;
-  verdict: RelayVerdict | null | undefined;
-  deleteSupport: DeleteSupport | undefined;
-  isChecking: boolean;
+  diagnostic: RelayDiagnostic;
 }) {
-  const relay = useMemo(() => pool.relay(relayUrl), [relayUrl]);
-  const info = use$(relay.information$);
-  const iconUrl = use$(relay.icon$);
-  const isOffline = verdict === "offline";
-  const isUnsupportedDelete = deleteSupport === "unsupported";
-  const name = info?.name ?? relayUrl;
-
   return (
-    <div
-      className={[
-        "flex items-center gap-2 py-2 min-w-0",
-        isOffline ? "border-l-2 border-error pl-2 -ml-0.5" : "",
-        isUnsupportedDelete ? "border-l-2 border-warning pl-2 -ml-0.5" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
-      <div className="flex-1 min-w-0 flex items-center gap-2">
-        {iconUrl ? (
-          <img
-            src={iconUrl}
-            alt=""
-            className="size-6 rounded shrink-0 object-cover bg-base-200"
-          />
-        ) : (
-          <div
-            className="size-6 rounded shrink-0 bg-base-200 flex items-center justify-center text-base-content/40 text-[10px] font-mono"
-            aria-hidden
-          >
-            …
-          </div>
-        )}
-        <div className="min-w-0 flex flex-col gap-0">
-          <span className="font-medium text-sm text-base-content truncate leading-tight">
-            {name}
-          </span>
-          <span className="font-mono text-[11px] text-base-content/50 truncate">
-            {relayUrl}
-          </span>
-        </div>
+    <div className="rounded-lg border border-base-200 p-3 flex flex-col gap-2">
+      <p className="font-mono text-xs break-all" title={relayUrl}>
+        {relayUrl}
+      </p>
+      <div className="flex flex-wrap gap-1">
+        <span
+          className={`badge badge-sm ${diagnostic.verdict === "online" ? "badge-success" : diagnostic.verdict === "offline" ? "badge-error" : "badge-ghost"}`}
+        >
+          Monitor: {diagnostic.verdict}
+        </span>
+        <span
+          className={`badge badge-sm ${diagnostic.giftWrapRetrieval === "error" ? "badge-error" : "badge-info"}`}
+        >
+          Gift-wrap retrieval: {diagnostic.giftWrapRetrieval}
+        </span>
       </div>
-      <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-        <DeleteSupportBadge
-          deleteSupport={deleteSupport}
-          isChecking={isChecking}
-        />
-        <VerdictBadge verdict={verdict} isChecking={isChecking} />
-      </div>
+      <p className="text-xs text-base-content/50">
+        {diagnostic.giftWrapCount > 0
+          ? `${diagnostic.giftWrapCount} encrypted kind 1059 gift wrap(s) observed.`
+          : diagnostic.giftWrapRetrieval === "empty"
+            ? "The request completed without any kind 1059 gift wraps."
+            : "Gift-wrap retrieval could not be established."}{" "}
+        {diagnostic.giftWrapRetrieval === "auth-required" &&
+          "This relay requires recipient authentication, as recommended for inbox privacy. This is not a delivery failure. "}
+        {diagnostic.invalidEvents > 0 &&
+          "Invalid or unrelated relay responses were ignored. "}
+        Gift wraps may contain private messages or Marmot Welcomes; their
+        encrypted contents are not inspected.
+      </p>
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// ReportContent
-// ---------------------------------------------------------------------------
 
 export function ReportContent({
   loaderState,
@@ -136,238 +56,124 @@ export function ReportContent({
 }: SectionProps<KeyPackageRelayListState>) {
   const isLoading = !loaderState?.complete;
   const state = loaderState?.data;
-
-  const relayUrls = state?.relayUrls ?? null;
-  const verdicts = useMemo(() => state?.verdicts ?? {}, [state?.verdicts]);
-  const deleteSupport = useMemo(
-    () => state?.deleteSupport ?? {},
-    [state?.deleteSupport],
+  const currentUrls = useMemo(
+    () => state?.currentInboxRelayUrls ?? [],
+    [state?.currentInboxRelayUrls],
   );
-  const urlList = useMemo(() => relayUrls ?? [], [relayUrls]);
-
-  const offlineCount = useMemo(
-    () => urlList.filter((url) => verdicts[url] === "offline").length,
-    [urlList, verdicts],
-  );
-
-  const allOnline = useMemo(
-    () =>
-      !isLoading &&
-      urlList.length > 0 &&
-      urlList.every((url) => verdicts[url] === "online"),
-    [isLoading, urlList, verdicts],
-  );
-
-  const unsupportedDeleteCount = useMemo(
-    () => urlList.filter((url) => deleteSupport[url] === "unsupported").length,
-    [urlList, deleteSupport],
-  );
-
-  const unknownDeleteCount = useMemo(
-    () => urlList.filter((url) => deleteSupport[url] === "unknown").length,
-    [urlList, deleteSupport],
-  );
-
-  const allDeleteSupported = useMemo(
-    () =>
-      !isLoading &&
-      urlList.length > 0 &&
-      urlList.every((url) => deleteSupport[url] === "supported"),
-    [isLoading, urlList, deleteSupport],
-  );
-
   const [reported, setReported] = useState(false);
 
   useEffect(() => {
-    if (!isLoading && !reported) {
-      setReported(true);
-      if (relayUrls === null) {
-        onDone({
-          status: "notfound",
-          summary: "No key package relay list found",
-        });
-      } else if (urlList.length === 0) {
-        onDone({
-          status: "notfound",
-          summary: "Key package relay list is empty",
-        });
-      } else if (
-        offlineCount > 0 ||
-        unsupportedDeleteCount > 0 ||
-        unknownDeleteCount > 0
-      ) {
-        const parts: string[] = [];
-        if (offlineCount > 0) {
-          parts.push(
-            `${offlineCount} offline relay${offlineCount !== 1 ? "s" : ""}`,
-          );
-        }
-        if (unsupportedDeleteCount > 0) {
-          parts.push(
-            `${unsupportedDeleteCount} relay${unsupportedDeleteCount !== 1 ? "s" : ""} missing event deletions`,
-          );
-        }
-        if (unknownDeleteCount > 0) {
-          parts.push(
-            `${unknownDeleteCount} relay${unknownDeleteCount !== 1 ? "s" : ""} unknown deletions support`,
-          );
-        }
-        onDone({
-          status: "error",
-          summary: parts.join(", "),
-        });
-      } else {
-        onDone({
-          status: "clean",
-          summary: `${urlList.length} relay${urlList.length !== 1 ? "s" : ""} online + event deletions`,
-        });
-      }
-    }
+    if (isLoading || reported) return;
+    setReported(true);
+    if (state) onDone(marmotRelayOutcome(state));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading]);
 
-  // Loading state
-  if (isLoading) {
-    return (
-      <div className="flex flex-col gap-4 py-2">
-        <div className="flex items-center gap-3">
+  return (
+    <div className="flex flex-col gap-5 py-2">
+      {isLoading && (
+        <div className="flex items-center gap-3 py-4">
           <span className="loading loading-spinner loading-sm text-primary" />
           <p className="text-sm text-base-content/60">
-            {urlList.length > 0
-              ? "Checking key package relay connectivity and event deletions support…"
-              : "Looking for your key package relay list…"}
+            Discovering relays and checking gift-wrap retrieval…
           </p>
-        </div>
-        {urlList.length > 0 && (
-          <div className="flex flex-col gap-0 divide-y divide-base-200">
-            {urlList.map((url) => (
-              <RelayRow
-                key={url}
-                relayUrl={url}
-                verdict={verdicts[url]}
-                deleteSupport={deleteSupport[url]}
-                isChecking={true}
-              />
-            ))}
-          </div>
-        )}
-        {!isDoneSection && (
-          <button
-            className="btn btn-ghost btn-sm w-full"
-            onClick={() => {
-              onDone({ status: "skipped", summary: "Skipped" });
-              onContinue();
-            }}
-          >
-            Skip
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  // Not found
-  if (relayUrls === null) {
-    return (
-      <div className="flex flex-col gap-3 py-2">
-        <div className="bg-base-200/60 rounded-xl p-4 text-sm text-base-content/60">
-          No key package relay list (kind:10051) found. This list tells others
-          where to deliver MLS key packages for you.
-        </div>
-        {!isDoneSection && (
-          <button
-            className="btn btn-primary btn-sm w-full"
-            onClick={onContinue}
-          >
-            Continue
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  // Empty list
-  if (urlList.length === 0) {
-    return (
-      <div className="flex flex-col gap-3 py-2">
-        <div className="bg-base-200/60 rounded-xl p-4 text-sm text-base-content/60">
-          Your key package relay list (kind:10051) exists but contains no
-          relays.
-        </div>
-        {!isDoneSection && (
-          <button
-            className="btn btn-primary btn-sm w-full"
-            onClick={onContinue}
-          >
-            Continue
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-4 py-2">
-      {allOnline && allDeleteSupported ? (
-        <div className="flex items-center gap-2 text-success">
-          <svg
-            className="size-4 shrink-0"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M5 13l4 4L19 7"
-            />
-          </svg>
-          <p className="text-sm font-medium">
-            All {urlList.length} key package relay
-            {urlList.length !== 1 ? "s" : ""} online and support event deletions
-          </p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-1">
-          {offlineCount > 0 && (
-            <p className="text-sm text-warning">
-              {offlineCount} relay{offlineCount !== 1 ? "s are" : " is"}{" "}
-              offline. Others may not be able to deliver key packages to you.
-            </p>
-          )}
-          {unsupportedDeleteCount > 0 && (
-            <p className="text-sm text-warning">
-              {unsupportedDeleteCount} relay
-              {unsupportedDeleteCount !== 1 ? "s do" : " does"} not advertise
-              event deletions support.
-            </p>
-          )}
-          {unknownDeleteCount > 0 && (
-            <p className="text-sm text-base-content/70">
-              Could not verify event deletions support on {unknownDeleteCount}{" "}
-              relay
-              {unknownDeleteCount !== 1 ? "s" : ""} (no `supported_nips` data).
-            </p>
-          )}
         </div>
       )}
-
-      <div className="flex flex-col gap-0 divide-y divide-base-200">
-        {urlList.map((url) => (
-          <RelayRow
+      <section className="flex flex-col gap-3">
+        <div>
+          <h3 className="font-semibold">Current Marmot relay discovery</h3>
+          <p className="text-xs text-base-content/60">
+            Kind 30443 KeyPackages use NIP-65 write relays. Kind 1059 Welcome
+            events use the recipient&apos;s kind 10050 inbox relays.
+          </p>
+        </div>
+        <h4 className="text-sm font-semibold">
+          KeyPackage publication relays (NIP-65 writes)
+        </h4>
+        {!isLoading && !state?.discoveryComplete && (
+          <p className="alert alert-warning text-sm">
+            Relay-list discovery was incomplete or included invalid responses.
+            The signed lists observed so far are shown below.
+          </p>
+        )}
+        {(state?.nip65WriteRelays ?? []).length === 0 && (
+          <p className="text-sm text-warning">
+            No write-capable NIP-65 relays discovered.
+          </p>
+        )}
+        {(state?.nip65WriteRelays ?? []).map((url) => (
+          <div
             key={url}
-            relayUrl={url}
-            verdict={verdicts[url]}
-            deleteSupport={deleteSupport[url]}
-            isChecking={false}
-          />
+            className="rounded-lg border border-base-200 p-3 text-xs flex flex-col gap-2"
+          >
+            <span className="font-mono break-all">{url}</span>
+            <span>
+              Monitor: {state?.writeRelays[url]?.verdict ?? "unknown"} · NIP-09:{" "}
+              {state?.writeRelays[url]?.deleteSupport ?? "unknown"}
+            </span>
+          </div>
         ))}
-      </div>
+        <p className="text-xs text-base-content/50">
+          NIP-09 is a relay advertisement, not proof of deletion. Read-only
+          checks do not test publishing. Monitor reports may be stale.
+        </p>
+        <h4 className="text-sm font-semibold">
+          Welcome inbox relays (kind 10050)
+        </h4>
+        {state?.currentInboxRelayUrls === undefined ? (
+          <p className="text-sm text-base-content/60">
+            {isLoading
+              ? "Discovering current inbox relays…"
+              : "Current inbox relay discovery did not complete."}
+          </p>
+        ) : state.currentInboxRelayUrls === null ? (
+          <p className="rounded-xl bg-warning/10 p-4 text-sm">
+            No current kind 10050 inbox relay list was found.
+          </p>
+        ) : currentUrls.length === 0 ? (
+          <p className="rounded-xl bg-warning/10 p-4 text-sm">
+            The current kind 10050 inbox relay list is empty.
+          </p>
+        ) : (
+          currentUrls.map((url) => (
+            <RelayRow
+              key={url}
+              relayUrl={url}
+              diagnostic={state?.currentRelays[url] ?? UNKNOWN_DIAGNOSTIC}
+            />
+          ))
+        )}
+        {(state?.invalidWriteUrls.length ?? 0) +
+          (state?.invalidInboxUrls.length ?? 0) >
+          0 && (
+          <p className="alert alert-error text-sm">
+            Invalid relay URLs were excluded:{" "}
+            {[
+              ...(state?.invalidWriteUrls ?? []),
+              ...(state?.invalidInboxUrls ?? []),
+            ]
+              .map((url) => url || "(empty URL)")
+              .join(", ")}
+          </p>
+        )}
+        <p className="text-xs text-base-content/50">
+          Gift-wrap reads do not test Welcome decryption, acceptance, or future
+          delivery.
+        </p>
+      </section>
 
       {!isDoneSection && (
-        <button className="btn btn-primary btn-sm w-full" onClick={onContinue}>
-          Continue
+        <button
+          className="btn btn-primary btn-sm w-full"
+          onClick={() => {
+            if (isLoading) {
+              setReported(true);
+              onDone({ status: "skipped", summary: "Skipped" });
+            }
+            onContinue();
+          }}
+        >
+          {isLoading ? "Skip" : "Continue"}
         </button>
       )}
     </div>

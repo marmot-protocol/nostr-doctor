@@ -1,5 +1,4 @@
-/// <reference types="bun" />
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { firstValueFrom } from "rxjs";
 import { probeRelayAuth } from "../probe-relay-auth.ts";
 

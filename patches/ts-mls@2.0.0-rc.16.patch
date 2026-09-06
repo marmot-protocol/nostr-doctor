@@ -1,0 +1,39 @@
+diff --git a/dist/src/diagnostics.d.ts b/dist/src/diagnostics.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f1d9d0cc7b32dca422816541f0a0df50ff0993b1
+--- /dev/null
++++ b/dist/src/diagnostics.d.ts
+@@ -0,0 +1,6 @@
++// Narrow public-data surface; no group state or crypto-provider dependencies.
++export { mlsMessageDecoder, mlsMessageEncoder } from "./message.js";
++export { encode } from "./codec/tlsEncoder.js";
++export { keyPackageEncoder, keyPackageTBSEncoder, makeKeyPackageRef, verifyKeyPackage } from "./keyPackage.js";
++export { verifyLeafNodeSignatureKeyPackage, signLeafNodeKeyPackage } from "./leafNode.js";
++export { signWithLabel } from "./crypto/signature.js";
+diff --git a/dist/src/diagnostics.js b/dist/src/diagnostics.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..f1d9d0cc7b32dca422816541f0a0df50ff0993b1
+--- /dev/null
++++ b/dist/src/diagnostics.js
+@@ -0,0 +1,6 @@
++// Narrow public-data surface; no group state or crypto-provider dependencies.
++export { mlsMessageDecoder, mlsMessageEncoder } from "./message.js";
++export { encode } from "./codec/tlsEncoder.js";
++export { keyPackageEncoder, keyPackageTBSEncoder, makeKeyPackageRef, verifyKeyPackage } from "./keyPackage.js";
++export { verifyLeafNodeSignatureKeyPackage, signLeafNodeKeyPackage } from "./leafNode.js";
++export { signWithLabel } from "./crypto/signature.js";
+diff --git a/package.json b/package.json
+index 8ebd4a00aa130ccee8730782d7ffe1e12f5d0c8b..5d911e16da56ebf07ff70cda8193e46dac12e46a 100644
+--- a/package.json
++++ b/package.json
+@@ -13,6 +13,10 @@
+       "types": "./dist/src/index.d.ts",
+       "import": "./dist/src/index.js",
+       "default": "./dist/src/index.js"
++    },
++    "./diagnostics": {
++      "types": "./dist/src/diagnostics.d.ts",
++      "import": "./dist/src/diagnostics.js"
+     }
+   },
+   "files": [

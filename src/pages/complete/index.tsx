@@ -3,7 +3,10 @@ import { use$ } from "applesauce-react/hooks";
 import { useReport } from "../../context/ReportContext.tsx";
 import { subjectPubkey$ } from "../../lib/subjectPubkey.ts";
 import { draftEvents$ } from "../../lib/draftEvents.ts";
-import { sectionOutcomes$ } from "../../lib/sectionOutcomes.ts";
+import {
+  sectionOutcomes$,
+  hasUnresolvedChecks as checkUnresolvedOutcomes,
+} from "../../lib/sectionOutcomes.ts";
 import { manager } from "../../lib/accounts.ts";
 import doctorLogo from "../../assets/nostr-doctor.webp";
 import Footer from "../../components/Footer.tsx";
@@ -53,10 +56,8 @@ function CompleteView() {
 
   const draftArray = Object.values(draftEvents);
 
-  // True if any section had issues but the user skipped without fixing them
-  const hasSkippedIssues = Object.values(sectionOutcomes).some(
-    (o) => o.status === "skipped",
-  );
+  // Unvalidated or incomplete checks must not turn into a healthy summary.
+  const hasUnresolvedChecks = checkUnresolvedOutcomes(sectionOutcomes);
 
   // Signed in as someone else — hand off to the dedicated referral flow
   if (isCrossUser) {
@@ -82,14 +83,14 @@ function CompleteView() {
           {isReadOnly ? (
             <ReadOnlyView
               draftEvents={draftArray}
-              hasSkippedIssues={hasSkippedIssues}
+              hasUnresolvedChecks={hasUnresolvedChecks}
               onStartOver={handleStartOver}
               subjectPubkey={originalSubjectPubkey ?? ""}
             />
           ) : (
             <SelfView
               draftEvents={draftArray}
-              hasSkippedIssues={hasSkippedIssues}
+              hasUnresolvedChecks={hasUnresolvedChecks}
               onStartOver={handleStartOver}
             />
           )}

@@ -1,5 +1,4 @@
-/// <reference types="bun" />
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import type { TimeoutConfig } from "rxjs";
 import { delay, of, Subject } from "rxjs";
 import { timeoutWithIgnore } from "../timeout-with-ignore.ts";
