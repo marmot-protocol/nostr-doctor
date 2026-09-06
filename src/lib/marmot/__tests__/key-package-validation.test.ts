@@ -22,6 +22,10 @@ const validate = async (options: Parameters<typeof fixture>[0] = {}) => {
 };
 const failed = (result: Awaited<ReturnType<typeof validate>>) =>
   result.checks.filter((c) => c.status === "fail").map((c) => c.id);
+const omitUpstreamComponent = (tags: string[][]) =>
+  tags.map((tag) =>
+    tag[0] === "app_components" ? tag.filter((id) => id !== "0x0001") : tag,
+  );
 
 describe("public Marmot MLS validation", () => {
   it.each([1, 2, 3, 4, 5, 6, 7])(
@@ -143,6 +147,84 @@ describe("public Marmot MLS validation", () => {
         tags.map((t) => (t[0] === "mls_extensions" ? [...t, "0xf2d1"] : t)),
     });
     expect(failed(result)).toEqual(["advertisements"]);
+  });
+  it("accepts Marmot component tags that omit upstream 0x0001 without changing signed support", async () => {
+    const result = await validate({ modifyTags: omitUpstreamComponent });
+    expect(result.status).toBe("valid");
+    expect(failed(result)).toEqual([]);
+    expect(result.components).toEqual(COMPONENTS);
+    expect(result.checks.find((c) => c.id === "account-proof")?.status).toBe(
+      "pass",
+    );
+  });
+  it("validates advertised components without requiring every signed capability to be advertised", async () => {
+    const result = await validate({
+      modifyTags: (tags) =>
+        tags.map((tag) =>
+          tag[0] === "app_components" ? ["app_components", "0x8009"] : tag,
+        ),
+    });
+    expect(result.status).toBe("valid");
+    expect(result.components).toEqual(COMPONENTS);
+  });
+  it.each(["0x8001", "0x0002", "0xfafa"])(
+    "rejects advertised component %s when absent from signed support",
+    async (id) => {
+      const result = await validate({
+        modifyTags: (tags) =>
+          omitUpstreamComponent(tags).map((tag) =>
+            tag[0] === "app_components" ? [...tag, id] : tag,
+          ),
+      });
+      expect(failed(result)).toEqual(["advertisements"]);
+    },
+  );
+  it.each([
+    [],
+    [["app_components"]],
+    [["app_components", "0x8003"]],
+    [["app_components", "0x8009", "0x8009"]],
+    [
+      ["app_components", "0x8009"],
+      ["app_components", "0x8003"],
+    ],
+    [["app_components", "0x8009", "0X8003"]],
+  ])(
+    "rejects missing proof advertisement or malformed component tags %#",
+    async (...componentTags) => {
+      const result = await validate({
+        modifyTags: (tags) => [
+          ...tags.filter((tag) => tag[0] !== "app_components"),
+          ...componentTags,
+        ],
+      });
+      expect(failed(result)).toEqual(["advertisements"]);
+    },
+  );
+  it.each([1, 0x8009])("still requires signed component 0x%s", async (id) => {
+    const result = await validate({
+      components: COMPONENTS.filter((component) => component !== id),
+      modifyTags: omitUpstreamComponent,
+    });
+    expect(failed(result)).toContain("components");
+  });
+  it("still verifies the identity proof when upstream 0x0001 is omitted from tags", async () => {
+    const result = await validate({
+      modifyTags: omitUpstreamComponent,
+      proofMutation: (proof) => {
+        proof[50] ^= 1;
+      },
+    });
+    expect(failed(result)).toEqual(["account-proof"]);
+  });
+  it("still rejects default MLS capabilities when upstream 0x0001 is omitted from tags", async () => {
+    const result = await validate({
+      modifyTags: omitUpstreamComponent,
+      modifyLeaf: (leaf) => {
+        leaf.capabilities.extensions.unshift(3);
+      },
+    });
+    expect(failed(result)).toEqual(["capabilities"]);
   });
   it("distinguishes optional group improvements from invalid baseline packages", async () => {
     const result = await validate({ components: [1, 0x8009] });
@@ -322,7 +404,7 @@ describe("diagnostic trust boundaries", () => {
     expect(result.status).toBe("valid");
   });
   it("reports successful public validation in the final section outcome", async () => {
-    const { event } = await fixture();
+    const { event } = await fixture({ modifyTags: omitUpstreamComponent });
     const mls = await validatePublicKeyPackage(event, ACCOUNT, NOW);
     const state = {
       nip65WriteRelays: ["wss://example.com"],

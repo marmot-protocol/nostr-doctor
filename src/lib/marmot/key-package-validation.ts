@@ -357,6 +357,20 @@ export async function validatePublicKeyPackage(
           values.every((v) => listed.includes(hexId(v)))
         );
       };
+      // The transport advertises Marmot components, not necessarily the entire
+      // MLS support list. In particular, upstream app_components (0x0001) may
+      // be omitted here; it is still mandatory in the signed LeafNode above.
+      // Every public claim must be backed by that signed list, including any
+      // upstream or future component ids the publisher chooses to include.
+      // https://github.com/marmot-protocol/marmot/blob/master/transports/nostr.md#keypackage-publication
+      const componentTags = event.tags.filter((t) => t[0] === "app_components");
+      const advertisedComponents = componentTags[0]?.slice(1) ?? [];
+      const supportedComponents = new Set((result.components ?? []).map(hexId));
+      const componentsMatch =
+        componentTags.length === 1 &&
+        advertisedComponents.includes("0x8009") &&
+        new Set(advertisedComponents).size === advertisedComponents.length &&
+        advertisedComponents.every((id) => supportedComponents.has(id));
       return (
         event.tags.filter((t) => t[0] === "mls_protocol_version").length ===
           1 &&
@@ -365,10 +379,10 @@ export async function validatePublicKeyPackage(
         matches("mls_ciphersuite", [kp.cipherSuite]) &&
         matches("mls_extensions", leaf.capabilities.extensions) &&
         matches("mls_proposals", leaf.capabilities.proposals) &&
-        matches("app_components", result.components ?? [])
+        componentsMatch
       );
     },
-    "Version, ciphersuite, extension, proposal and component tags match the decoded package.",
+    "MLS tags match the decoded package; advertised components are supported by the signed LeafNode and include 0x8009.",
     "Public capability tags disagree with the signed MLS data.",
   );
 

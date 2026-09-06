@@ -37,6 +37,13 @@ without equating every optional feature with malformed MLS. A group requiring a
 missing capability cannot add that package. Fetching from every relay is not a
 Marmot interoperability requirement.
 
+The public `app_components` tag advertises Marmot components and need not equal
+the entire signed MLS support list. Every advertised id must occur in the signed
+LeafNode support list, and the tag must include `0x8009`. Upstream component
+`0x0001` may be omitted from the tag but must remain in the signed support list.
+Component structure and the `0x8009` identity proof are validated independently;
+group compatibility uses the signed support list, not the public tag subset.
+
 The final section outcome distinguishes verified public candidates, invalid
 publications, and incomplete checks. Unverified packages never become green
 because a request timed out. Cleanup does not claim to rotate a package or erase
