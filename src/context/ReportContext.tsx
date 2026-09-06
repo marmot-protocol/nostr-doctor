@@ -4,7 +4,6 @@ import {
   fakeVerifyEvent,
   getEventHash,
   getEventUID,
-  relaySet,
   type EventTemplate,
   type NostrEvent,
 } from "applesauce-core/helpers";
@@ -20,10 +19,10 @@ import {
 import { useLocation, useNavigate } from "react-router";
 import { draftEvents$ } from "../lib/draftEvents.ts";
 import { factory } from "../lib/factory.ts";
-import { DEFAULT_RELAYS, pool } from "../lib/relay.ts";
 import { pagePath } from "../lib/routing.ts";
 import { eventStore } from "../lib/store.ts";
 import { subjectPubkey$ } from "../lib/subjectPubkey.ts";
+import { publishReportEvent } from "../lib/deletion-relays.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -146,6 +145,10 @@ export function ReportProvider({ pages, children }: ReportProviderProps) {
         return;
       }
 
+      if (account.pubkey !== subjectPubkey)
+        throw new Error(
+          "Sign in as the account being diagnosed to publish its fixes.",
+        );
       const signed = await factory.sign(template);
       // Hydrate the store immediately so subsequent reports read the new event
       // rather than the stale version that was fetched from relays.
@@ -154,7 +157,7 @@ export function ReportProvider({ pages, children }: ReportProviderProps) {
         ...draftEvents$.getValue(),
         [getEventUID(canonical)]: canonical,
       });
-      await pool.publish(relaySet(outboxes, DEFAULT_RELAYS), signed);
+      await publishReportEvent(signed, outboxes);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [account, subjectPubkey, outboxes?.join(",")],

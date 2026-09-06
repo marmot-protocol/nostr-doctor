@@ -25,6 +25,9 @@ import { ReportContent as BlossomServersContent } from "./blossom-servers/page.t
 import { createLoader as createKeyPackagesLoader } from "./key-packages/loader.ts";
 import { ReportContent as KeyPackagesContent } from "./key-packages/page.tsx";
 
+import { createLoader as createLegacyCleanupLoader } from "./marmot-legacy-cleanup/loader.ts";
+import LegacyCleanupContent from "./marmot-legacy-cleanup/page.tsx";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
   {
@@ -53,7 +56,7 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
     name: "marmot-key-package-relays",
     label: "Marmot Relay Discovery",
     description:
-      "Separates current NIP-65 and kind 10050 inbox diagnostics from legacy kind 10051 relay health",
+      "Checks NIP-65 publication relays and kind 10050 Welcome inboxes",
     createLoader: createKeyPackageRelaysLoader,
     Component: KeyPackageRelaysContent,
   },
@@ -74,10 +77,16 @@ const REPORT_SECTIONS: ReportSectionDefinition<any>[] = [
   {
     name: "key-packages",
     label: "Marmot KeyPackages",
-    description:
-      "Diagnoses current addressable kind 30443 publication slots and separately reports legacy kind 443 events",
+    description: "Decodes and validates current kind 30443 KeyPackages",
     createLoader: createKeyPackagesLoader,
     Component: KeyPackagesContent,
+  },
+  {
+    name: "marmot-legacy-cleanup",
+    label: "Legacy Marmot Cleanup",
+    description: "Finds obsolete kind 443 and 10051 events for deletion",
+    createLoader: createLegacyCleanupLoader,
+    Component: LegacyCleanupContent,
   },
 ];
 

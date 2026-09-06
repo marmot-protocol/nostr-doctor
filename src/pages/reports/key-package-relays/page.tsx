@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { pool } from "../../../lib/relay.ts";
+import { marmotRelayOutcome } from "../marmot-outcomes.ts";
 import type { SectionProps } from "../accordion-types.ts";
-import type { KeyPackageRelayListState, RelayDiagnostic } from "./loader.ts";
+import {
+  UNKNOWN_DIAGNOSTIC,
+  type KeyPackageRelayListState,
+  type RelayDiagnostic,
+} from "./loader.ts";
 
 function RelayRow({
   relayUrl,
@@ -10,34 +14,35 @@ function RelayRow({
   relayUrl: string;
   diagnostic: RelayDiagnostic;
 }) {
-  const relay = useMemo(() => pool.relay(relayUrl), [relayUrl]);
   return (
     <div className="rounded-lg border border-base-200 p-3 flex flex-col gap-2">
-      <p className="font-mono text-xs break-all" title={relay.url}>
+      <p className="font-mono text-xs break-all" title={relayUrl}>
         {relayUrl}
       </p>
       <div className="flex flex-wrap gap-1">
         <span
           className={`badge badge-sm ${diagnostic.verdict === "online" ? "badge-success" : diagnostic.verdict === "offline" ? "badge-error" : "badge-ghost"}`}
         >
-          {diagnostic.verdict}
+          Monitor: {diagnostic.verdict}
         </span>
         <span
-          className={`badge badge-sm ${diagnostic.deleteSupport === "supported" ? "badge-success" : diagnostic.deleteSupport === "unsupported" ? "badge-warning" : "badge-ghost"}`}
+          className={`badge badge-sm ${diagnostic.giftWrapRetrieval === "error" ? "badge-error" : "badge-info"}`}
         >
-          NIP-09 {diagnostic.deleteSupport}
-        </span>
-        <span
-          className={`badge badge-sm ${diagnostic.welcomeReachability === "error" ? "badge-error" : "badge-info"}`}
-        >
-          Welcome {diagnostic.welcomeReachability}
+          Gift-wrap retrieval: {diagnostic.giftWrapRetrieval}
         </span>
       </div>
       <p className="text-xs text-base-content/50">
-        {diagnostic.welcomeCount === 0
-          ? "No kind 1059 Welcome events were observed for this account."
-          : `${diagnostic.welcomeCount} encrypted kind 1059 Welcome event${diagnostic.welcomeCount === 1 ? "" : "s"} observed.`}{" "}
-        Encrypted event content is never displayed.
+        {diagnostic.giftWrapCount > 0
+          ? `${diagnostic.giftWrapCount} encrypted kind 1059 gift wrap(s) observed.`
+          : diagnostic.giftWrapRetrieval === "empty"
+            ? "The request completed without any kind 1059 gift wraps."
+            : "Gift-wrap retrieval could not be established."}{" "}
+        {diagnostic.giftWrapRetrieval === "auth-required" &&
+          "This relay requires recipient authentication, as recommended for inbox privacy. This is not a delivery failure. "}
+        {diagnostic.invalidEvents > 0 &&
+          "Invalid or unrelated relay responses were ignored. "}
+        Gift wraps may contain private messages or Marmot Welcomes; their
+        encrypted contents are not inspected.
       </p>
     </div>
   );
@@ -55,57 +60,25 @@ export function ReportContent({
     () => state?.currentInboxRelayUrls ?? [],
     [state?.currentInboxRelayUrls],
   );
-  const legacyUrls = useMemo(
-    () => state?.legacyRelayUrls ?? [],
-    [state?.legacyRelayUrls],
-  );
   const [reported, setReported] = useState(false);
 
   useEffect(() => {
     if (isLoading || reported) return;
     setReported(true);
-    const failed = currentUrls.filter((url) => {
-      const diagnostic = state?.currentRelays[url];
-      return (
-        !diagnostic ||
-        diagnostic.verdict !== "online" ||
-        diagnostic.deleteSupport !== "supported" ||
-        diagnostic.welcomeReachability === "error"
-      );
-    }).length;
-    if (state?.currentInboxRelayUrls === null) {
-      onDone({
-        status: "notfound",
-        summary: "No current kind 10050 inbox relay list found",
-      });
-    } else if (failed > 0) {
-      onDone({
-        status: "error",
-        summary: `${failed} current inbox relay issue${failed === 1 ? "" : "s"}`,
-      });
-    } else {
-      onDone({
-        status: "clean",
-        summary: `${currentUrls.length} current inbox relay${currentUrls.length === 1 ? "" : "s"} checked`,
-      });
-    }
+    if (state) onDone(marmotRelayOutcome(state));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading]);
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-3 py-4">
-        <span className="loading loading-spinner loading-sm text-primary" />
-        <p className="text-sm text-base-content/60">
-          Discovering NIP-65 and inbox relays, then checking optional Welcome
-          reachability…
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col gap-5 py-2">
+      {isLoading && (
+        <div className="flex items-center gap-3 py-4">
+          <span className="loading loading-spinner loading-sm text-primary" />
+          <p className="text-sm text-base-content/60">
+            Discovering relays and checking gift-wrap retrieval…
+          </p>
+        </div>
+      )}
       <section className="flex flex-col gap-3">
         <div>
           <h3 className="font-semibold">Current Marmot relay discovery</h3>
@@ -114,13 +87,46 @@ export function ReportContent({
             events use the recipient&apos;s kind 10050 inbox relays.
           </p>
         </div>
-        <div className="rounded-xl bg-base-200/60 p-3 text-xs">
-          <span className="font-medium">NIP-65 write relays: </span>
-          {(state?.nip65WriteRelays.length ?? 0) > 0
-            ? state?.nip65WriteRelays.join(", ")
-            : "none discovered"}
-        </div>
-        {state?.currentInboxRelayUrls === null ? (
+        <h4 className="text-sm font-semibold">
+          KeyPackage publication relays (NIP-65 writes)
+        </h4>
+        {!isLoading && !state?.discoveryComplete && (
+          <p className="alert alert-warning text-sm">
+            Relay-list discovery was incomplete or included invalid responses.
+            The signed lists observed so far are shown below.
+          </p>
+        )}
+        {(state?.nip65WriteRelays ?? []).length === 0 && (
+          <p className="text-sm text-warning">
+            No write-capable NIP-65 relays discovered.
+          </p>
+        )}
+        {(state?.nip65WriteRelays ?? []).map((url) => (
+          <div
+            key={url}
+            className="rounded-lg border border-base-200 p-3 text-xs flex flex-col gap-2"
+          >
+            <span className="font-mono break-all">{url}</span>
+            <span>
+              Monitor: {state?.writeRelays[url]?.verdict ?? "unknown"} · NIP-09:{" "}
+              {state?.writeRelays[url]?.deleteSupport ?? "unknown"}
+            </span>
+          </div>
+        ))}
+        <p className="text-xs text-base-content/50">
+          NIP-09 is a relay advertisement, not proof of deletion. Read-only
+          checks do not test publishing. Monitor reports may be stale.
+        </p>
+        <h4 className="text-sm font-semibold">
+          Welcome inbox relays (kind 10050)
+        </h4>
+        {state?.currentInboxRelayUrls === undefined ? (
+          <p className="text-sm text-base-content/60">
+            {isLoading
+              ? "Discovering current inbox relays…"
+              : "Current inbox relay discovery did not complete."}
+          </p>
+        ) : state.currentInboxRelayUrls === null ? (
           <p className="rounded-xl bg-warning/10 p-4 text-sm">
             No current kind 10050 inbox relay list was found.
           </p>
@@ -133,50 +139,41 @@ export function ReportContent({
             <RelayRow
               key={url}
               relayUrl={url}
-              diagnostic={state!.currentRelays[url]}
+              diagnostic={state?.currentRelays[url] ?? UNKNOWN_DIAGNOSTIC}
             />
           ))
         )}
+        {(state?.invalidWriteUrls.length ?? 0) +
+          (state?.invalidInboxUrls.length ?? 0) >
+          0 && (
+          <p className="alert alert-error text-sm">
+            Invalid relay URLs were excluded:{" "}
+            {[
+              ...(state?.invalidWriteUrls ?? []),
+              ...(state?.invalidInboxUrls ?? []),
+            ]
+              .map((url) => url || "(empty URL)")
+              .join(", ")}
+          </p>
+        )}
         <p className="text-xs text-base-content/50">
-          NIP-09 support indicates whether a relay advertises deletion support;
-          current KeyPackage deletion events themselves are kind 5.
+          Gift-wrap reads do not test Welcome decryption, acceptance, or future
+          delivery.
         </p>
       </section>
 
-      <section className="flex flex-col gap-3 border-t border-base-200 pt-4">
-        <div>
-          <h3 className="font-semibold">Legacy migration diagnostics</h3>
-          <p className="text-xs text-base-content/60">
-            Legacy kind 10051 KeyPackage relays are shown separately and do not
-            determine current Marmot health.
-          </p>
-        </div>
-        {state?.legacyRelayUrls === null ? (
-          <p className="text-sm text-base-content/50">
-            No legacy kind 10051 relay list found.
-          </p>
-        ) : legacyUrls.length === 0 ? (
-          <p className="text-sm text-base-content/50">
-            Legacy kind 10051 relay list is empty.
-          </p>
-        ) : (
-          legacyUrls.map((url) => (
-            <div
-              key={url}
-              className="flex justify-between gap-2 rounded-lg border border-base-200 p-3 text-xs"
-            >
-              <span className="font-mono break-all">{url}</span>
-              <span className="badge badge-ghost badge-xs">
-                {state?.legacyVerdicts[url] ?? "unknown"}
-              </span>
-            </div>
-          ))
-        )}
-      </section>
-
       {!isDoneSection && (
-        <button className="btn btn-primary btn-sm w-full" onClick={onContinue}>
-          Continue
+        <button
+          className="btn btn-primary btn-sm w-full"
+          onClick={() => {
+            if (isLoading) {
+              setReported(true);
+              onDone({ status: "skipped", summary: "Skipped" });
+            }
+            onContinue();
+          }}
+        >
+          {isLoading ? "Skip" : "Continue"}
         </button>
       )}
     </div>

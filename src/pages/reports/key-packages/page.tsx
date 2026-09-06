@@ -1,16 +1,87 @@
 import { useEffect, useMemo, useState } from "react";
-import { setDeleteEvents } from "applesauce-core/operations/delete";
-import { factory } from "../../../lib/factory.ts";
-import type {
-  CurrentKeyPackage,
-  LegacyKeyPackage,
-} from "../marmot-diagnostics.ts";
+import { buildKeyPackageDeletion } from "../../../lib/marmot/key-package-deletion.ts";
+import { keyPackageOutcome } from "../marmot-outcomes.ts";
+import type { CurrentKeyPackage } from "../marmot-diagnostics.ts";
 import type { SectionProps } from "../accordion-types.ts";
 import type { KeyPackagesState } from "./loader.ts";
+import type {
+  KeyPackageValidation,
+  ValidationCheck,
+} from "../../../lib/marmot/key-package-validation.ts";
+
+function CheckRow({ check }: { check: ValidationCheck }) {
+  return (
+    <li className="flex flex-col gap-1 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={`badge badge-xs ${check.status === "pass" ? "badge-success" : check.status === "fail" ? "badge-error" : "badge-warning"}`}
+        >
+          {check.status === "pass"
+            ? "Passed"
+            : check.status === "fail"
+              ? "Failed"
+              : check.status === "warning"
+                ? "Improve"
+                : "Not verified"}
+        </span>
+        <span className="font-medium">{check.label}</span>
+      </div>
+      <p className="text-base-content/70">{check.detail}</p>
+      {check.remedy && <p className="text-base-content/60">{check.remedy}</p>}
+    </li>
+  );
+}
+
+function ValidationDetails({
+  validation,
+}: {
+  validation: KeyPackageValidation | undefined;
+}) {
+  if (!validation)
+    return (
+      <p className="text-xs text-warning">
+        Decoded validation is pending or did not finish before the report
+        deadline. Retry to complete it.
+      </p>
+    );
+  const issues = validation.checks.filter((check) => check.status !== "pass");
+  const passed = validation.checks.filter((check) => check.status === "pass");
+  return (
+    <div className="text-xs">
+      {issues.length > 0 && (
+        <ul className="divide-y divide-base-200">
+          {issues.map((check) => (
+            <CheckRow key={check.id} check={check} />
+          ))}
+        </ul>
+      )}
+      <details className="mt-2">
+        <summary className="cursor-pointer font-medium text-success">
+          {passed.length} public checks passed — details
+        </summary>
+        <ul className="divide-y divide-base-200">
+          {passed.map((check) => (
+            <CheckRow key={check.id} check={check} />
+          ))}
+        </ul>
+      </details>
+    </div>
+  );
+}
 
 function statusClass(status: CurrentKeyPackage["status"]): string {
-  if (status === "unvalidated-mls") return "badge-info";
-  if (status === "partial-relay" || status === "unsupported-mls")
+  if (status === "valid") return "badge-success";
+  if (
+    status === "unvalidated-mls" ||
+    status === "deletion-requested" ||
+    status === "relay-expired"
+  )
+    return "badge-warning";
+  if (
+    status === "partial-relay" ||
+    status === "relay-unverified" ||
+    status === "unsupported-mls"
+  )
     return "badge-warning";
   return "badge-error";
 }
@@ -28,9 +99,7 @@ function PackageCard({
     <div className="rounded-xl border border-base-200 bg-base-100 p-4 flex flex-col gap-2">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold truncate">
-            Publication slot / device candidate
-          </p>
+          <p className="text-sm font-semibold truncate">Publication slot</p>
           <p className="font-mono text-xs text-base-content/60 break-all">
             {pkg.publicationSlot}
           </p>
@@ -40,6 +109,18 @@ function PackageCard({
         </span>
       </div>
       <p className="text-xs text-base-content/60">{pkg.detail}</p>
+      {pkg.selected && (
+        <p className="text-xs text-success">
+          Newest verified candidate in this publication slot.
+        </p>
+      )}
+      {!pkg.selected && pkg.status === "valid" && (
+        <p className="text-xs text-base-content/60">
+          An older valid revision; a newer verified candidate exists in this
+          slot.
+        </p>
+      )}
+      <ValidationDetails validation={pkg.mls} />
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
         <dt className="text-base-content/40">Event</dt>
         <dd className="font-mono truncate" title={pkg.id}>
@@ -56,6 +137,12 @@ function PackageCard({
             <dd className="break-all">{pkg.missingFromRelays.join(", ")}</dd>
           </>
         )}
+        {pkg.uncheckedRelays.length > 0 && (
+          <>
+            <dt className="text-base-content/40">Unverified</dt>
+            <dd className="break-all">{pkg.uncheckedRelays.join(", ")}</dd>
+          </>
+        )}
         {pkg.client && (
           <>
             <dt className="text-base-content/40">Client claim</dt>
@@ -66,34 +153,14 @@ function PackageCard({
       <button
         className={`btn btn-xs self-end ${queued ? "btn-warning" : "btn-ghost"}`}
         onClick={onToggle}
-        disabled={pkg.status === "deleted"}
+        disabled={pkg.status === "deletion-requested"}
       >
-        {pkg.status === "deleted"
-          ? "Already deleted"
+        {pkg.status === "deletion-requested"
+          ? "Deletion requested"
           : queued
             ? "Deletion queued"
             : "Queue kind 5 deletion"}
       </button>
-    </div>
-  );
-}
-
-function LegacyCard({ pkg }: { pkg: LegacyKeyPackage }) {
-  return (
-    <div className="rounded-lg border border-base-200 p-3 text-xs flex flex-col gap-1">
-      <div className="flex justify-between gap-2">
-        <span className="font-medium">Legacy event {pkg.id.slice(0, 8)}…</span>
-        <span className="badge badge-ghost badge-xs">kind 443</span>
-      </div>
-      <p className="text-base-content/60">
-        {pkg.deviceCandidate
-          ? `Legacy device label/candidate: ${pkg.deviceCandidate}`
-          : "No legacy device label"}
-      </p>
-      <p className="text-base-content/40">
-        Seen on {pkg.foundOnRelays.length} relay
-        {pkg.foundOnRelays.length === 1 ? "" : "s"}
-      </p>
     </div>
   );
 }
@@ -111,70 +178,64 @@ export function ReportContent({
     () => state?.currentPackages ?? [],
     [state?.currentPackages],
   );
-  const legacyPackages = useMemo(
-    () => state?.legacyPackages ?? [],
-    [state?.legacyPackages],
-  );
   const [queuedIds, setQueuedIds] = useState<Set<string>>(new Set());
   const [reported, setReported] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
 
   useEffect(() => {
     if (isLoading || reported) return;
     setReported(true);
-    const unhealthy = currentPackages.filter(
-      (pkg) => pkg.status !== "unvalidated-mls",
-    ).length;
-    if (currentPackages.length === 0) {
-      onDone({
-        status: "notfound",
-        summary: "No current kind 30443 KeyPackages found",
-      });
-    } else if (unhealthy > 0) {
-      onDone({
-        status: "error",
-        summary: `${unhealthy} current KeyPackage issue${unhealthy === 1 ? "" : "s"}`,
-      });
-    } else {
-      onDone({
-        status: "clean",
-        summary: `${currentPackages.length} current publication slot${currentPackages.length === 1 ? "" : "s"} found`,
-      });
-    }
+    if (state) onDone(keyPackageOutcome(state));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading]);
 
   async function handleContinue() {
-    const toDelete = currentPackages.filter((pkg) => queuedIds.has(pkg.id));
-    if (toDelete.length > 0) {
-      const draft = await factory.build(
-        { kind: 5 },
-        setDeleteEvents(toDelete.map((pkg) => pkg.event)),
+    setError(null);
+    setPublishing(true);
+    try {
+      const toDelete = currentPackages.filter((pkg) => queuedIds.has(pkg.id));
+      if (toDelete.length > 0) {
+        const draft = await buildKeyPackageDeletion(
+          toDelete.map((pkg) => pkg.id),
+        );
+        await publish(draft);
+      }
+      onContinue();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not submit deletion requests.",
       );
-      await publish(draft);
+    } finally {
+      setPublishing(false);
     }
-    onContinue();
-  }
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-3 py-4">
-        <span className="loading loading-spinner loading-sm text-primary" />
-        <p className="text-sm text-base-content/60">
-          Checking current and legacy Marmot KeyPackages…
-        </p>
-      </div>
-    );
   }
 
   return (
     <div className="flex flex-col gap-5 py-2">
+      {isLoading && (
+        <div className="flex items-center gap-3 py-4">
+          <span className="loading loading-spinner loading-sm text-primary" />
+          <p className="text-sm text-base-content/60">
+            Checking Marmot KeyPackages…
+          </p>
+        </div>
+      )}
+      {!isLoading && (state?.incompleteRelays.length ?? 0) > 0 && (
+        <p className="alert alert-warning text-sm">
+          Some relay requests failed or did not finish. Observed packages are
+          shown below; absence on those relays is unverified.
+        </p>
+      )}
       <section className="flex flex-col gap-3">
         <div>
           <h3 className="font-semibold">Current Marmot</h3>
           <p className="text-xs text-base-content/60">
-            Kind 30443 addressable KeyPackages, collapsed by pubkey/kind/d. A d
-            value is only a publication slot or device candidate, not an
-            authenticated device.
+            Public kind 30443 KeyPackages are decoded and checked below. Each
+            slot selects its newest verified candidate; invalid and older
+            publications remain visible. A slot does not identify a device.
           </p>
         </div>
         {(state?.nip65WriteRelays.length ?? 0) === 0 && (
@@ -184,13 +245,17 @@ export function ReportContent({
           </div>
         )}
         <div className="alert alert-info text-xs">
-          This build has no maintained shared MLS parser. It checks required
-          metadata and base64 encoding, but reports otherwise plausible MLS
-          bytes and their internal lifetime as not validated.
+          These checks verify public invitation material. They cannot prove the
+          recipient still holds its private keys, can process a Welcome, or
+          supports every feature required by a particular group.
         </div>
         {currentPackages.length === 0 ? (
           <p className="rounded-xl bg-base-200/60 p-4 text-sm text-base-content/60">
-            No current kind 30443 KeyPackages found.
+            {isLoading
+              ? "Searching for current kind 30443 KeyPackages…"
+              : (state?.incompleteRelays.length ?? 0) > 0
+                ? "No current KeyPackages observed before the search ended."
+                : "No current kind 30443 KeyPackages found."}
           </p>
         ) : (
           currentPackages.map((pkg) => (
@@ -211,29 +276,31 @@ export function ReportContent({
         )}
       </section>
 
-      <section className="flex flex-col gap-3 border-t border-base-200 pt-4">
-        <div>
-          <h3 className="font-semibold">Legacy migration diagnostics</h3>
-          <p className="text-xs text-base-content/60">
-            Legacy kind 443 packages discovered through the legacy kind 10051
-            relay list. These results do not represent current Marmot health.
-          </p>
-        </div>
-        {legacyPackages.length === 0 ? (
-          <p className="text-sm text-base-content/50">
-            No legacy kind 443 packages found.
-          </p>
-        ) : (
-          legacyPackages.map((pkg) => <LegacyCard key={pkg.id} pkg={pkg} />)
-        )}
-      </section>
-
+      {error && <p className="text-error text-sm">{error}</p>}
+      {!isDoneSection && !isLoading && queuedIds.size > 0 && (
+        <button className="btn btn-ghost btn-sm" onClick={onContinue}>
+          Skip deletions
+        </button>
+      )}
       {!isDoneSection && (
         <button
           className="btn btn-primary btn-sm w-full"
-          onClick={handleContinue}
+          disabled={publishing}
+          onClick={() => {
+            if (isLoading) {
+              setReported(true);
+              onDone({ status: "skipped", summary: "Skipped" });
+              onContinue();
+            } else void handleContinue();
+          }}
         >
-          Continue
+          {isLoading
+            ? "Skip"
+            : publishing
+              ? "Submitting…"
+              : queuedIds.size
+                ? `Request ${queuedIds.size} deletion(s) & Continue`
+                : "Continue"}
         </button>
       )}
     </div>

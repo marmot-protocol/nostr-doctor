@@ -1,172 +1,169 @@
 import type { User } from "applesauce-common/casts";
 import { relaySet } from "applesauce-core/helpers";
-import { defined } from "applesauce-core/observable";
-import { onlyEvents } from "applesauce-relay";
-import { forkJoin, of, shareReplay, timer, type Observable } from "rxjs";
 import {
   catchError,
-  first,
-  last,
+  combineLatest,
+  defer,
+  distinctUntilChanged,
   map,
+  of,
+  shareReplay,
   startWith,
-  switchMap,
   takeUntil,
-  toArray,
-} from "rxjs/operators";
+  timer,
+} from "rxjs";
 import {
   relayVerdict,
   type RelayVerdict,
 } from "../../../lib/relay-monitors.ts";
 import { LOOKUP_RELAYS, pool } from "../../../lib/relay.ts";
 import { LOADER_TIMEOUT_MS } from "../../../lib/timeouts.ts";
-import { fetchRelayListUrls } from "../../../observable/operator/relay-loaders.ts";
+import { combineLatestByValue } from "../../../observable/operator/combine-latest-by-value.ts";
+import {
+  discoverNip65,
+  discoverRelayList,
+  EMPTY_RELAY_LIST,
+  requestRelayEvents,
+} from "../marmot-loaders.ts";
 import {
   CURRENT_INBOX_RELAYS_KIND,
-  DELETE_EVENT_KIND,
-  LEGACY_KEY_PACKAGE_RELAYS_KIND,
-  WELCOME_KIND,
+  GIFT_WRAP_KIND,
 } from "../marmot-diagnostics.ts";
 
-export {
-  CURRENT_INBOX_RELAYS_KIND,
-  DELETE_EVENT_KIND,
-  LEGACY_KEY_PACKAGE_RELAYS_KIND,
-  WELCOME_KIND,
-};
-
-const NIP09 = 9;
-
-export type DeleteSupport = "supported" | "unsupported" | "unknown";
-
-export type RelayDiagnostic = {
+export type DeleteSupport = "advertised" | "not-advertised" | "unknown";
+export type WriteRelayDiagnostic = {
   verdict: RelayVerdict;
   deleteSupport: DeleteSupport;
-  welcomeCount: number;
-  welcomeReachability: "reachable" | "empty" | "error";
 };
-
+export type RelayDiagnostic = {
+  verdict: RelayVerdict;
+  giftWrapCount: number;
+  giftWrapRetrieval:
+    | "observed"
+    | "empty"
+    | "error"
+    | "unknown"
+    | "auth-required";
+  invalidEvents: number;
+};
+export const UNKNOWN_DIAGNOSTIC: RelayDiagnostic = {
+  verdict: "unknown",
+  giftWrapCount: 0,
+  giftWrapRetrieval: "unknown",
+  invalidEvents: 0,
+};
 export type KeyPackageRelayListState = {
   nip65WriteRelays: string[];
-  currentInboxRelayUrls: string[] | null;
+  invalidWriteUrls: string[];
+  invalidInboxUrls: string[];
+  discoveryComplete: boolean;
+  writeRelays: Record<string, WriteRelayDiagnostic>;
+  currentInboxRelayUrls: string[] | null | undefined;
   currentRelays: Record<string, RelayDiagnostic>;
-  legacyRelayUrls: string[] | null;
-  legacyVerdicts: Record<string, RelayVerdict>;
-  fetching: boolean;
 };
 
-const EMPTY_STATE: KeyPackageRelayListState = {
-  nip65WriteRelays: [],
-  currentInboxRelayUrls: null,
-  currentRelays: {},
-  legacyRelayUrls: null,
-  legacyVerdicts: {},
-  fetching: true,
-};
-
-function inspectCurrentRelay(
-  relayUrl: string,
-  pubkey: string,
-): Observable<[string, RelayDiagnostic]> {
-  const verdict$ = relayVerdict(relayUrl).pipe(
-    last(undefined, "unknown" as RelayVerdict),
+function monitorVerdict(url: string) {
+  return defer(() => relayVerdict(url)).pipe(
     catchError(() => of("unknown" as RelayVerdict)),
+    startWith("unknown" as RelayVerdict),
   );
-  const deleteSupport$ = pool.relay(relayUrl).supported$.pipe(
-    last(null),
-    map((supportedNips) => {
-      if (!Array.isArray(supportedNips)) return "unknown" as const;
-      return supportedNips.includes(NIP09)
-        ? ("supported" as const)
-        : ("unsupported" as const);
-    }),
-    catchError(() => of("unknown" as const)),
-  );
-  const welcomes$ = pool
-    .relay(relayUrl)
-    .request({ kinds: [WELCOME_KIND], "#p": [pubkey] })
-    .pipe(
-      onlyEvents(),
-      toArray(),
-      map((events) => ({ count: events.length, error: false })),
-      catchError(() => of({ count: 0, error: true })),
-    );
-
-  return forkJoin({
-    verdict: verdict$,
-    deleteSupport: deleteSupport$,
-    welcomes: welcomes$,
+}
+function inspectWriteRelay(url: string) {
+  return combineLatest({
+    verdict: monitorVerdict(url),
+    deleteSupport: defer(() => pool.relay(url).supported$).pipe(
+      map(
+        (nips): DeleteSupport =>
+          !Array.isArray(nips)
+            ? "unknown"
+            : nips.includes(9)
+              ? "advertised"
+              : "not-advertised",
+      ),
+      catchError(() => of("unknown" as DeleteSupport)),
+      startWith("unknown" as DeleteSupport),
+    ),
+  });
+}
+function inspectInboxRelay(url: string, pubkey: string) {
+  return combineLatest({
+    verdict: monitorVerdict(url),
+    giftWraps: requestRelayEvents(url, {
+      kinds: [GIFT_WRAP_KIND],
+      "#p": [pubkey],
+    }).pipe(
+      startWith({
+        relayUrl: url,
+        events: [],
+        error: false,
+        complete: false,
+        invalidEvents: 0,
+        authRequired: false,
+      }),
+    ),
   }).pipe(
-    map(({ verdict, deleteSupport, welcomes }) => [
-      relayUrl,
-      {
+    map(
+      ({ verdict, giftWraps }): RelayDiagnostic => ({
         verdict,
-        deleteSupport,
-        welcomeCount: welcomes.count,
-        welcomeReachability: welcomes.error
-          ? "error"
-          : welcomes.count > 0
-            ? "reachable"
-            : "empty",
-      },
-    ]),
+        giftWrapCount: giftWraps.events.length,
+        invalidEvents: giftWraps.invalidEvents ?? 0,
+        giftWrapRetrieval: giftWraps.authRequired
+          ? "auth-required"
+          : giftWraps.error
+            ? "error"
+            : giftWraps.events.length > 0
+              ? "observed"
+              : giftWraps.complete && !giftWraps.invalidEvents
+                ? "empty"
+                : "unknown",
+      }),
+    ),
   );
 }
 
-function inspectLegacyRelay(
-  relayUrl: string,
-): Observable<[string, RelayVerdict]> {
-  return relayVerdict(relayUrl).pipe(
-    last(undefined, "unknown" as RelayVerdict),
-    catchError(() => of("unknown" as RelayVerdict)),
-    map((verdict) => [relayUrl, verdict]),
+export function createLoader(user: User) {
+  const nip65$ = discoverNip65(user);
+  const outboxes$ = nip65$.pipe(
+    map((list) => relaySet(list.urls)),
+    distinctUntilChanged((a, b) => a.join() === b.join()),
   );
-}
+  const hints$ = outboxes$.pipe(map((urls) => relaySet(urls, LOOKUP_RELAYS)));
+  const inbox$ = discoverRelayList(
+    user.pubkey,
+    CURRENT_INBOX_RELAYS_KIND,
+    hints$,
+  );
+  const writeChecks$ = outboxes$.pipe(
+    combineLatestByValue(inspectWriteRelay),
+    startWith(new Map<string, WriteRelayDiagnostic>()),
+  );
+  const inboxChecks$ = inbox$.pipe(
+    map((list) => relaySet(list.urls)),
+    combineLatestByValue((url) => inspectInboxRelay(url, user.pubkey)),
+    startWith(new Map<string, RelayDiagnostic>()),
+  );
 
-export function createLoader(user: User): Observable<KeyPackageRelayListState> {
-  return user.outboxes$.pipe(
-    defined(), // skip undefined (cache miss) and null
-    first(), // take first cached outbox list and complete
-    map((outboxes) => relaySet(outboxes)),
-    switchMap((nip65WriteRelays) => {
-      const lookupRelays = relaySet(nip65WriteRelays, LOOKUP_RELAYS);
-      return forkJoin({
-        currentInboxRelayUrls: fetchRelayListUrls(
-          CURRENT_INBOX_RELAYS_KIND,
-          user.pubkey,
-          lookupRelays,
-        ),
-        legacyRelayUrls: fetchRelayListUrls(
-          LEGACY_KEY_PACKAGE_RELAYS_KIND,
-          user.pubkey,
-          lookupRelays,
-        ),
-      }).pipe(
-        switchMap(({ currentInboxRelayUrls, legacyRelayUrls }) => {
-          const currentChecks = (currentInboxRelayUrls ?? []).map((relay) =>
-            inspectCurrentRelay(relay, user.pubkey),
-          );
-          const legacyChecks = (legacyRelayUrls ?? []).map(inspectLegacyRelay);
-          return forkJoin({
-            current:
-              currentChecks.length > 0 ? forkJoin(currentChecks) : of([]),
-            legacy: legacyChecks.length > 0 ? forkJoin(legacyChecks) : of([]),
-          }).pipe(
-            map(
-              ({ current, legacy }): KeyPackageRelayListState => ({
-                nip65WriteRelays,
-                currentInboxRelayUrls,
-                currentRelays: Object.fromEntries(current),
-                legacyRelayUrls,
-                legacyVerdicts: Object.fromEntries(legacy),
-                fetching: false,
-              }),
-            ),
-          );
-        }),
-      );
-    }),
-    startWith(EMPTY_STATE),
-    catchError(() => of({ ...EMPTY_STATE, fetching: false })),
+  return combineLatest({
+    nip65: nip65$.pipe(startWith(EMPTY_RELAY_LIST)),
+    inbox: inbox$.pipe(startWith(EMPTY_RELAY_LIST)),
+    writes: writeChecks$,
+    inboxes: inboxChecks$,
+  }).pipe(
+    map(
+      ({ nip65, inbox, writes, inboxes }): KeyPackageRelayListState => ({
+        nip65WriteRelays: relaySet(nip65.urls),
+        invalidWriteUrls: nip65.invalidUrls,
+        invalidInboxUrls: inbox.invalidUrls,
+        discoveryComplete: nip65.complete && inbox.complete,
+        writeRelays: Object.fromEntries(writes),
+        currentInboxRelayUrls: inbox.event
+          ? relaySet(inbox.urls)
+          : inbox.complete
+            ? null
+            : undefined,
+        currentRelays: Object.fromEntries(inboxes),
+      }),
+    ),
     takeUntil(timer(LOADER_TIMEOUT_MS)),
     shareReplay(1),
   );

@@ -19,7 +19,7 @@ function kindLabel(kind: number): string {
     case 3:
       return "Follow list";
     case 5:
-      return "Event deletion";
+      return "Event deletion request";
     case 10002:
       return "Relay list (NIP-65)";
     case 10006:
@@ -31,7 +31,7 @@ function kindLabel(kind: number): string {
     case 10050:
       return "DM relays";
     case 10051:
-      return "Key package relays";
+      return "Legacy key package relays";
     default:
       return `Kind ${kind}`;
   }
@@ -62,7 +62,7 @@ function DraftEventRow({
         </div>
         {deletedIds.length > 0 && (
           <p className="text-xs text-base-content/40 font-mono truncate">
-            deletes {deletedIds[0].slice(0, 12)}…
+            requests deletion of {deletedIds[0].slice(0, 12)}…
             {deletedIds.length > 1 && ` +${deletedIds.length - 1} more`}
           </p>
         )}
@@ -190,12 +190,12 @@ function InlineExtensionSignIn({ subjectPubkey }: { subjectPubkey: string }) {
 
 function ReadOnlyView({
   draftEvents,
-  hasSkippedIssues,
+  hasUnresolvedChecks,
   onStartOver,
   subjectPubkey,
 }: {
   draftEvents: NostrEvent[];
-  hasSkippedIssues: boolean;
+  hasUnresolvedChecks: boolean;
   onStartOver: () => void;
   subjectPubkey: string;
 }) {
@@ -209,7 +209,7 @@ function ReadOnlyView({
     draftEvents$.next(next);
   }
 
-  if (!hasDrafts && !hasSkippedIssues) {
+  if (!hasDrafts && !hasUnresolvedChecks) {
     return (
       <>
         <CompleteHeader subtitle="No changes were needed — your profile looks healthy." />
@@ -221,17 +221,17 @@ function ReadOnlyView({
     );
   }
 
-  if (!hasDrafts && hasSkippedIssues) {
+  if (!hasDrafts && hasUnresolvedChecks) {
     return (
       <>
         <CompleteHeader subtitle="Your diagnostic is complete." />
         <div className="bg-warning/10 border border-warning/30 rounded-xl p-5 flex flex-col gap-2">
           <p className="text-sm font-medium text-base-content">
-            Suggested changes were skipped
+            Some checks remain unresolved
           </p>
           <p className="text-sm text-base-content/60">
-            Some issues were found during the diagnostic but no fixes were
-            selected. Go back to review and apply the suggested changes.
+            Some checks found issues, were skipped, or could not be fully
+            validated. Go back to review the details.
           </p>
           <button
             className="btn btn-warning btn-sm mt-1 self-start"

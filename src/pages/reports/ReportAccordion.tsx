@@ -154,7 +154,7 @@ function StatusIcon({
       </span>
     );
   }
-  // notfound
+  // notfound or warning
   return (
     <span className="size-5 rounded-full bg-warning/20 flex items-center justify-center shrink-0">
       <svg
